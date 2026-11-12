@@ -1,6 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
+<<<<<<< HEAD
         android:label="sleep_timer_app"
+=======
+        android:label="eepy_time"
+>>>>>>> origin/main
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -30,6 +34,7 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+<<<<<<< HEAD
 
         <receiver
             android:name=".MyDeviceAdminReceiver"
@@ -43,6 +48,8 @@
                 <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
             </intent-filter>
         </receiver>
+=======
+>>>>>>> origin/main
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

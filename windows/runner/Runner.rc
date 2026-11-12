@@ -89,6 +89,7 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
+<<<<<<< HEAD
             VALUE "CompanyName", "com.pkb" "\0"
             VALUE "FileDescription", "sleep_timer_app" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
@@ -96,6 +97,15 @@ BEGIN
             VALUE "LegalCopyright", "Copyright (C) 2026 com.pkb. All rights reserved." "\0"
             VALUE "OriginalFilename", "sleep_timer_app.exe" "\0"
             VALUE "ProductName", "sleep_timer_app" "\0"
+=======
+            VALUE "CompanyName", "com.example" "\0"
+            VALUE "FileDescription", "eepy_time" "\0"
+            VALUE "FileVersion", VERSION_AS_STRING "\0"
+            VALUE "InternalName", "eepy_time" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 com.example. All rights reserved." "\0"
+            VALUE "OriginalFilename", "eepy_time.exe" "\0"
+            VALUE "ProductName", "eepy_time" "\0"
+>>>>>>> origin/main
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END
