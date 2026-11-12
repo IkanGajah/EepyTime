@@ -1,9 +1,4 @@
-<<<<<<< HEAD
-# sleep_timer_app
-=======
 # eepy_time
->>>>>>> origin/main
-
 A new Flutter project.
 
 ## Getting Started
