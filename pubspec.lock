@@ -132,18 +132,13 @@ packages:
     source: hosted
     version: "1.18.3"
   path:
-<<<<<<< HEAD
     dependency: "direct main"
-=======
-    dependency: transitive
->>>>>>> origin/main
     description:
       name: path
       sha256: "75cca69d1490965be98c73ceaea117e8a04dd21217b37b292c9ddbec0d955bc5"
       url: "https://pub.dev"
     source: hosted
     version: "1.9.1"
-<<<<<<< HEAD
   platform:
     dependency: transitive
     description:
@@ -160,8 +155,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.1.8"
-=======
->>>>>>> origin/main
   sky_engine:
     dependency: transitive
     description: flutter
@@ -175,7 +168,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.10.2"
-<<<<<<< HEAD
   sqflite:
     dependency: "direct main"
     description:
@@ -216,8 +208,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.4.4"
-=======
->>>>>>> origin/main
   stack_trace:
     dependency: transitive
     description:
@@ -242,7 +232,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.4.1"
-<<<<<<< HEAD
   synchronized:
     dependency: transitive
     description:
@@ -251,8 +240,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.6.1+1"
-=======
->>>>>>> origin/main
   term_glyph:
     dependency: transitive
     description:
@@ -287,8 +274,4 @@ packages:
     version: "15.4.0"
 sdks:
   dart: ">=3.13.5 <4.0.0"
-<<<<<<< HEAD
   flutter: ">=3.44.0"
-=======
-  flutter: ">=3.18.0-18.0.pre.54"
->>>>>>> origin/main

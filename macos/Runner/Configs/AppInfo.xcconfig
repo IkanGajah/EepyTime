@@ -5,7 +5,6 @@
 // 'flutter create' template.
 
 // The application's name. By default this is also the title of the Flutter window.
-<<<<<<< HEAD
 PRODUCT_NAME = sleep_timer_app
 
 // The application's bundle identifier
@@ -13,12 +12,3 @@ PRODUCT_BUNDLE_IDENTIFIER = com.pkb.sleepTimerApp
 
 // The copyright displayed in application information
 PRODUCT_COPYRIGHT = Copyright © 2026 com.pkb. All rights reserved.
-=======
-PRODUCT_NAME = eepy_time
-
-// The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.example.eepyTime
-
-// The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2026 com.example. All rights reserved.
->>>>>>> origin/main
