@@ -82,202 +82,117 @@ class _TimerTabViewState extends State<TimerTabView>
     );
   }
 
-  Future<void> _showManualDurationDialog() async {
-    final int initHours = _controller.initialSeconds ~/ 3600;
-    final int initMinutes = (_controller.initialSeconds % 3600) ~/ 60;
-    final int initSeconds = _controller.initialSeconds % 60;
+  Future<void> _handleStartOrPausePressed() async {
+    if (_controller.timerStatus != TimerStatus.running &&
+        _controller.remainingSeconds <= 0 &&
+        _controller.initialSeconds <= 0) {
+      _showSnackBar(
+        'Pilih preset atau atur durasi manual terlebih dahulu.',
+        isWarning: true,
+      );
+      return;
+    }
 
-    final TextEditingController hoursCtrl = TextEditingController(
-      text: initHours > 0 ? initHours.toString() : '0',
-    );
-    final TextEditingController minutesCtrl = TextEditingController(
-      text: initMinutes.toString(),
-    );
-    final TextEditingController secondsCtrl = TextEditingController(
-      text: initSeconds.toString(),
-    );
-
-    await showDialog<void>(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          title: const Row(
-            children: <Widget>[
-              Icon(Icons.timer_outlined),
-              SizedBox(width: 10),
-              Expanded(child: Text('Pilih Durasi Manual')),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              const Text(
-                'Masukkan waktu hitung mundur sebelum suara diredam dan layar dikunci:',
-                style: TextStyle(fontSize: 13),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: <Widget>[
-                  Expanded(
-                    child: _DurationInputField(
-                      controller: hoursCtrl,
-                      label: 'Jam',
-                      hint: '0',
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _DurationInputField(
-                      controller: minutesCtrl,
-                      label: 'Menit',
-                      hint: '15',
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _DurationInputField(
-                      controller: secondsCtrl,
-                      label: 'Detik',
-                      hint: '0',
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Batal'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final int h = int.tryParse(hoursCtrl.text.trim()) ?? 0;
-                final int m = int.tryParse(minutesCtrl.text.trim()) ?? 0;
-                final int s = int.tryParse(secondsCtrl.text.trim()) ?? 0;
-                final int totalSeconds = (h * 3600) + (m * 60) + s;
-
-                if (totalSeconds <= 0) {
-                  _showSnackBar(
-                    'Durasi harus lebih dari 0 detik.',
-                    isWarning: true,
-                  );
-                  return;
-                }
-
-                final String customLabel =
-                    'Manual (${_formatReadableDuration(totalSeconds)})';
-                _controller.selectDuration(totalSeconds, customLabel);
-                Navigator.of(dialogContext).pop();
-                _showSnackBar('Durasi diatur ke $customLabel');
-              },
-              child: const Text('Terapkan'),
-            ),
-          ],
-        );
-      },
-    );
-
-    hoursCtrl.dispose();
-    minutesCtrl.dispose();
-    secondsCtrl.dispose();
-  }
-
-  Future<void> _showAddPresetDialog() async {
-    final TextEditingController labelCtrl = TextEditingController();
-    final TextEditingController minutesCtrl = TextEditingController(text: '20');
-    final TextEditingController secondsCtrl = TextEditingController(text: '0');
-
-    await showDialog<void>(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          title: const Row(
-            children: <Widget>[
-              Icon(Icons.bookmark_add_outlined),
-              SizedBox(width: 10),
-              Expanded(child: Text('Tambah Preset Durasi')),
-            ],
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
+    if (_controller.timerStatus == TimerStatus.idle &&
+        !_controller.isAdminActive) {
+      final String? choice = await showDialog<String>(
+        context: context,
+        builder: (BuildContext dialogContext) {
+          return AlertDialog(
+            title: Row(
               children: <Widget>[
-                TextField(
-                  controller: labelCtrl,
-                  textCapitalization: TextCapitalization.words,
-                  decoration: const InputDecoration(
-                    labelText: 'Nama Preset',
-                    hintText: 'Contoh: Podcast Malam',
-                    border: OutlineInputBorder(),
-                    prefixIcon: Icon(Icons.label_outline),
-                  ),
+                Icon(
+                  Icons.warning_amber_rounded,
+                  color: Colors.amber.shade400,
                 ),
-                const SizedBox(height: 14),
-                Row(
-                  children: <Widget>[
-                    Expanded(
-                      child: _DurationInputField(
-                        controller: minutesCtrl,
-                        label: 'Menit',
-                        hint: '20',
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _DurationInputField(
-                        controller: secondsCtrl,
-                        label: 'Detik',
-                        hint: '0',
-                      ),
-                    ),
-                  ],
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text('Mulai Tanpa Kunci Layar?'),
                 ),
               ],
             ),
-          ),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Batal'),
+            content: const Text(
+              'Izin Device Administrator belum aktif. Jika timer habis sekarang, '
+              'EepyTime hanya dapat meredam suara media ke 0 tanpa mengunci layar perangkat.',
             ),
-            FilledButton.icon(
-              onPressed: () async {
-                final String rawLabel = labelCtrl.text.trim();
-                final int m = int.tryParse(minutesCtrl.text.trim()) ?? 0;
-                final int s = int.tryParse(secondsCtrl.text.trim()) ?? 0;
-                final int totalSeconds = (m * 60) + s;
+            actions: <Widget>[
+              TextButton(
+                onPressed: () =>
+                    Navigator.of(dialogContext).pop('start_anyway'),
+                child: const Text('Tetap Mulai (Hanya Mute)'),
+              ),
+              FilledButton.icon(
+                onPressed: () => Navigator.of(dialogContext).pop('grant_admin'),
+                icon: const Icon(Icons.admin_panel_settings_outlined),
+                label: const Text('Beri Izin Dulu'),
+              ),
+            ],
+          );
+        },
+      );
 
-                if (totalSeconds <= 0) {
-                  _showSnackBar(
-                    'Total durasi preset harus lebih dari 0 detik.',
-                    isWarning: true,
-                  );
-                  return;
-                }
+      if (choice == 'grant_admin') {
+        await _controller.requestAdminPermission();
+        return;
+      }
+      if (choice != 'start_anyway') {
+        return;
+      }
+    }
 
-                final String finalLabel = rawLabel.isEmpty
-                    ? 'Preset (${_formatReadableDuration(totalSeconds)})'
-                    : rawLabel;
+    final bool wasRunning = _controller.timerStatus == TimerStatus.running;
+    final bool changed = _controller.startOrPauseTimer();
+    if (changed && _controller.isToastEnabled) {
+      _showSnackBar(
+        wasRunning
+            ? 'EepyTime dijeda pada ${_controller.formattedRemainingTime}.'
+            : 'EepyTime dimulai (${_controller.activePresetLabel}).',
+      );
+    }
+  }
 
-                await _controller.addPreset(finalLabel, totalSeconds);
-                if (dialogContext.mounted) {
-                  Navigator.of(dialogContext).pop();
-                }
-                _showSnackBar('Preset "$finalLabel" berhasil disimpan.');
-              },
-              icon: const Icon(Icons.save_outlined),
-              label: const Text('Simpan'),
-            ),
-          ],
+  Future<void> _showManualDurationDialog() async {
+    final int? selectedSeconds = await showDialog<int>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return _ManualDurationDialog(
+          initialTotalSeconds: _controller.initialSeconds,
         );
       },
     );
 
-    labelCtrl.dispose();
-    minutesCtrl.dispose();
-    secondsCtrl.dispose();
+    if (selectedSeconds == null || selectedSeconds <= 0 || !mounted) {
+      return;
+    }
+
+    final String customLabel =
+        'Manual (${_formatReadableDuration(selectedSeconds)})';
+    _controller.selectDuration(selectedSeconds, customLabel);
+    _showSnackBar('Durasi diatur ke $customLabel');
+  }
+
+  Future<void> _showAddPresetDialog() async {
+    final ({String label, int seconds})? result =
+        await showDialog<({String label, int seconds})>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return const _AddPresetDialog();
+      },
+    );
+
+    if (result == null || result.seconds <= 0 || !mounted) {
+      return;
+    }
+
+    final String finalLabel = result.label.isEmpty
+        ? 'Preset (${_formatReadableDuration(result.seconds)})'
+        : result.label;
+
+    await _controller.addPreset(finalLabel, result.seconds);
+    if (!mounted) {
+      return;
+    }
+    _showSnackBar('Preset "$finalLabel" berhasil disimpan.');
   }
 
   void _showUninstallGuideDialog() {
@@ -607,7 +522,7 @@ class _TimerTabViewState extends State<TimerTabView>
           ),
           const SizedBox(height: 22),
 
-          // Tombol Kontrol Utama: Mulai/Jeda & Atur Ulang
+          // Tombol Kontrol Utama: Mulai/Jeda & Reset ke 0
           Row(
             children: <Widget>[
               Expanded(
@@ -622,7 +537,7 @@ class _TimerTabViewState extends State<TimerTabView>
                         ? Colors.white
                         : colorScheme.onPrimary,
                   ),
-                  onPressed: _controller.startOrPauseTimer,
+                  onPressed: _handleStartOrPausePressed,
                   icon: Icon(
                     isRunning
                         ? Icons.pause_rounded
@@ -653,15 +568,36 @@ class _TimerTabViewState extends State<TimerTabView>
               ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
 
-          // Tombol Pilih Durasi Manual
+          // Tombol Pilih Durasi Manual (Outlined & Tinted agar jelas terlihat)
           SizedBox(
             width: double.infinity,
-            child: TextButton.icon(
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: colorScheme.primary,
+                backgroundColor: colorScheme.primary.withValues(alpha: 0.12),
+                side: BorderSide(
+                  color: colorScheme.primary.withValues(alpha: 0.7),
+                  width: 1.4,
+                ),
+                padding: const EdgeInsets.symmetric(
+                  vertical: 13,
+                  horizontal: 14,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
               onPressed: _showManualDurationDialog,
-              icon: const Icon(Icons.edit_calendar_outlined, size: 18),
-              label: const Text('Pilih Durasi Manual (Jam : Menit : Detik)'),
+              icon: const Icon(Icons.edit_calendar_outlined, size: 19),
+              label: const Text(
+                'Pilih Durasi Manual (JJ : MM : DD)',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13.5,
+                ),
+              ),
             ),
           ),
         ],
@@ -692,11 +628,13 @@ class _TimerTabViewState extends State<TimerTabView>
                 color: colorScheme.primary,
               ),
               const SizedBox(width: 8),
-              const Text(
-                'Kontrol Cepat (Eksekusi Sekali Ketuk)',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
+              const Expanded(
+                child: Text(
+                  'Kontrol Cepat (Eksekusi Sekali Ketuk)',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
             ],
@@ -775,26 +713,33 @@ class _TimerTabViewState extends State<TimerTabView>
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: <Widget>[
-            Row(
-              children: <Widget>[
-                Icon(
-                  Icons.bookmarks_outlined,
-                  size: 20,
-                  color: colorScheme.primary,
-                ),
-                const SizedBox(width: 8),
-                const Text(
-                  'Preset Durasi Cepat',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
+            Icon(
+              Icons.bookmarks_outlined,
+              size: 20,
+              color: colorScheme.primary,
             ),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text(
+                'Preset Durasi',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
             FilledButton.tonalIcon(
+              style: FilledButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+              ),
               onPressed: _showAddPresetDialog,
               icon: const Icon(Icons.add_rounded, size: 18),
               label: const Text('Tambah Preset'),
@@ -1041,6 +986,267 @@ class _DurationInputField extends StatelessWidget {
           vertical: 12,
         ),
       ),
+    );
+  }
+}
+
+class _ManualDurationDialog extends StatefulWidget {
+  final int initialTotalSeconds;
+
+  const _ManualDurationDialog({
+    required this.initialTotalSeconds,
+  });
+
+  @override
+  State<_ManualDurationDialog> createState() => _ManualDurationDialogState();
+}
+
+class _ManualDurationDialogState extends State<_ManualDurationDialog> {
+  late final TextEditingController _hoursCtrl;
+  late final TextEditingController _minutesCtrl;
+  late final TextEditingController _secondsCtrl;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    final int initHours = widget.initialTotalSeconds ~/ 3600;
+    final int initMinutes = (widget.initialTotalSeconds % 3600) ~/ 60;
+    final int initSeconds = widget.initialTotalSeconds % 60;
+
+    _hoursCtrl = TextEditingController(
+      text: initHours > 0 ? initHours.toString() : '0',
+    );
+    _minutesCtrl = TextEditingController(
+      text: initMinutes.toString(),
+    );
+    _secondsCtrl = TextEditingController(
+      text: initSeconds.toString(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _hoursCtrl.dispose();
+    _minutesCtrl.dispose();
+    _secondsCtrl.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final int h = int.tryParse(_hoursCtrl.text.trim()) ?? 0;
+    final int m = int.tryParse(_minutesCtrl.text.trim()) ?? 0;
+    final int s = int.tryParse(_secondsCtrl.text.trim()) ?? 0;
+    final int totalSeconds = (h * 3600) + (m * 60) + s;
+
+    if (totalSeconds <= 0) {
+      setState(() {
+        _errorMessage = 'Durasi harus lebih dari 0 detik.';
+      });
+      return;
+    }
+
+    FocusScope.of(context).unfocus();
+    Navigator.of(context).pop(totalSeconds);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Row(
+        children: <Widget>[
+          Icon(Icons.timer_outlined),
+          SizedBox(width: 10),
+          Expanded(child: Text('Pilih Durasi Manual')),
+        ],
+      ),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            const Text(
+              'Masukkan waktu hitung mundur sebelum suara diredam dan layar dikunci:',
+              style: TextStyle(fontSize: 13),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: _DurationInputField(
+                    controller: _hoursCtrl,
+                    label: 'Jam',
+                    hint: '0',
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _DurationInputField(
+                    controller: _minutesCtrl,
+                    label: 'Menit',
+                    hint: '15',
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _DurationInputField(
+                    controller: _secondsCtrl,
+                    label: 'Detik',
+                    hint: '0',
+                  ),
+                ),
+              ],
+            ),
+            if (_errorMessage != null) ...<Widget>[
+              const SizedBox(height: 10),
+              Text(
+                _errorMessage!,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).colorScheme.error,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () {
+            FocusScope.of(context).unfocus();
+            Navigator.of(context).pop();
+          },
+          child: const Text('Batal'),
+        ),
+        FilledButton(
+          onPressed: _submit,
+          child: const Text('Terapkan'),
+        ),
+      ],
+    );
+  }
+}
+
+class _AddPresetDialog extends StatefulWidget {
+  const _AddPresetDialog();
+
+  @override
+  State<_AddPresetDialog> createState() => _AddPresetDialogState();
+}
+
+class _AddPresetDialogState extends State<_AddPresetDialog> {
+  late final TextEditingController _labelCtrl;
+  late final TextEditingController _minutesCtrl;
+  late final TextEditingController _secondsCtrl;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _labelCtrl = TextEditingController();
+    _minutesCtrl = TextEditingController(text: '20');
+    _secondsCtrl = TextEditingController(text: '0');
+  }
+
+  @override
+  void dispose() {
+    _labelCtrl.dispose();
+    _minutesCtrl.dispose();
+    _secondsCtrl.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final String rawLabel = _labelCtrl.text.trim();
+    final int m = int.tryParse(_minutesCtrl.text.trim()) ?? 0;
+    final int s = int.tryParse(_secondsCtrl.text.trim()) ?? 0;
+    final int totalSeconds = (m * 60) + s;
+
+    if (totalSeconds <= 0) {
+      setState(() {
+        _errorMessage = 'Total durasi preset harus lebih dari 0 detik.';
+      });
+      return;
+    }
+
+    FocusScope.of(context).unfocus();
+    Navigator.of(context).pop((label: rawLabel, seconds: totalSeconds));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Row(
+        children: <Widget>[
+          Icon(Icons.bookmark_add_outlined),
+          SizedBox(width: 10),
+          Expanded(child: Text('Tambah Preset Durasi')),
+        ],
+      ),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            TextField(
+              controller: _labelCtrl,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(
+                labelText: 'Nama Preset',
+                hintText: 'Contoh: Podcast Malam',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.label_outline),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: _DurationInputField(
+                    controller: _minutesCtrl,
+                    label: 'Menit',
+                    hint: '20',
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _DurationInputField(
+                    controller: _secondsCtrl,
+                    label: 'Detik',
+                    hint: '0',
+                  ),
+                ),
+              ],
+            ),
+            if (_errorMessage != null) ...<Widget>[
+              const SizedBox(height: 10),
+              Text(
+                _errorMessage!,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).colorScheme.error,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () {
+            FocusScope.of(context).unfocus();
+            Navigator.of(context).pop();
+          },
+          child: const Text('Batal'),
+        ),
+        FilledButton.icon(
+          onPressed: _submit,
+          icon: const Icon(Icons.save_outlined),
+          label: const Text('Simpan'),
+        ),
+      ],
     );
   }
 }

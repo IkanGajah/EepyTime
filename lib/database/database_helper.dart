@@ -11,7 +11,7 @@ class DatabaseHelper {
 
   factory DatabaseHelper() => instance;
 
-  static const String _databaseName = 'sleep_timer_utility.db';
+  static const String _databaseName = 'eepy_time.db';
   static const int _databaseVersion = 1;
 
   static const String tablePresets = 'presets';
@@ -107,6 +107,16 @@ class DatabaseHelper {
     batch.insert(
       tableSettings,
       <String, dynamic>{'key': 'haptic_feedback', 'value': 'true'},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    batch.insert(
+      tableSettings,
+      <String, dynamic>{'key': 'toast_notifications', 'value': 'true'},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    batch.insert(
+      tableSettings,
+      <String, dynamic>{'key': 'onboarding_completed', 'value': 'false'},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
 

@@ -180,7 +180,7 @@ class HistoryTabView extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
                         const Text(
-                          'Detail Sesi Timer Tidur',
+                          'Detail Sesi EepyTime',
                           style: TextStyle(
                             fontSize: 17,
                             fontWeight: FontWeight.bold,

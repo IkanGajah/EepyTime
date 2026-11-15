@@ -1,11 +1,11 @@
 {
-    "name": "sleep_timer_app",
-    "short_name": "sleep_timer_app",
+    "name": "EepyTime",
+    "short_name": "EepyTime",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#000000",
+    "theme_color": "#6366F1",
+    "description": "EepyTime — Offline-First Sleep & Mute Timer Utility.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

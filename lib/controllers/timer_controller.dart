@@ -1,7 +1,7 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 
 import '../database/database_helper.dart';
 import '../models/history_model.dart';
@@ -14,22 +14,29 @@ enum TimerStatus {
   paused,
 }
 
-class TimerController extends ChangeNotifier {
+class TimerController extends ChangeNotifier with WidgetsBindingObserver {
   final DatabaseHelper _databaseHelper;
   final NativeControlService _nativeControlService;
 
   Timer? _countdownTimer;
+  DateTime? _deadline;
 
-  int _initialSeconds = 900; // Default 15 Menit (900 detik)
-  int _remainingSeconds = 900;
-  String _activePresetLabel = 'Tidur Cepat (15 Menit)';
+  static const String defaultIdleLabel = 'Pilih Durasi / Preset';
+
+  int _initialSeconds = 0;
+  int _remainingSeconds = 0;
+  String _activePresetLabel = defaultIdleLabel;
   TimerStatus _timerStatus = TimerStatus.idle;
 
   bool _isAdminActive = false;
   bool _isMuted = false;
   bool _isPitchBlack = false;
   bool _isHapticEnabled = true;
+  bool _isToastEnabled = true;
+  bool _hasCompletedOnboarding = false;
   bool _isInitialized = false;
+  bool _isObservingLifecycle = false;
+  bool _isCompleting = false;
 
   List<PresetModel> _presets = <PresetModel>[];
   List<HistoryModel> _historyList = <HistoryModel>[];
@@ -45,7 +52,9 @@ class TimerController extends ChangeNotifier {
     NativeControlService? nativeControlService,
   })  : _databaseHelper = databaseHelper ?? DatabaseHelper.instance,
         _nativeControlService =
-            nativeControlService ?? NativeControlService.instance;
+            nativeControlService ?? NativeControlService.instance {
+    _nativeControlService.setNativeTimerEventHandler(_onNativeTimerEvent);
+  }
 
   // ===========================================================================
   // GETTERS
@@ -55,11 +64,14 @@ class TimerController extends ChangeNotifier {
   int get remainingSeconds => _remainingSeconds;
   String get activePresetLabel => _activePresetLabel;
   TimerStatus get timerStatus => _timerStatus;
+  DateTime? get deadline => _deadline;
 
   bool get isAdminActive => _isAdminActive;
   bool get isMuted => _isMuted;
   bool get isPitchBlack => _isPitchBlack;
   bool get isHapticEnabled => _isHapticEnabled;
+  bool get isToastEnabled => _isToastEnabled;
+  bool get hasCompletedOnboarding => _hasCompletedOnboarding;
   bool get isInitialized => _isInitialized;
 
   List<PresetModel> get presets => List<PresetModel>.unmodifiable(_presets);
@@ -90,18 +102,128 @@ class TimerController extends ChangeNotifier {
   }
 
   // ===========================================================================
-  // INISIALISASI & SINKRONISASI DATA
+  // INISIALISASI, LIFECYCLE, & SINKRONISASI DATA
   // ===========================================================================
 
   Future<void> initialize() async {
+    if (!_isObservingLifecycle) {
+      WidgetsBinding.instance.addObserver(this);
+      _isObservingLifecycle = true;
+    }
+
     await Future.wait(<Future<void>>[
       checkAdminStatus(),
       loadSettings(),
       loadPresets(),
       loadHistoryAndSummary(),
     ]);
+
+    await syncWithNativeState();
     _isInitialized = true;
     notifyListeners();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      checkAdminStatus();
+      syncWithNativeState();
+      if (_timerStatus == TimerStatus.running) {
+        _syncFromClock();
+      }
+    }
+  }
+
+  Future<void> syncWithNativeState() async {
+    final Map<String, Object?>? nativeState =
+        await _nativeControlService.getNativeTimerState();
+    if (nativeState == null) {
+      return;
+    }
+    await _applyNativeStateMap(nativeState);
+  }
+
+  Future<void> _onNativeTimerEvent(Map<String, Object?> payload) async {
+    await _applyNativeStateMap(payload);
+  }
+
+  Future<void> _applyNativeStateMap(Map<String, Object?> stateMap) async {
+    // 1. Flush any completions executed natively (e.g. "Tidur Sekarang" button or background alarm)
+    final Object? rawPending = stateMap['pendingCompletions'];
+    bool insertedAny = false;
+    if (rawPending is List<Object?> && rawPending.isNotEmpty) {
+      for (final Object? item in rawPending) {
+        if (item is Map<Object?, Object?>) {
+          final String label =
+              (item['presetLabel'] as String?) ?? _activePresetLabel;
+          final int duration =
+              (item['durationSeconds'] as num?)?.toInt() ?? _initialSeconds;
+          final String executedAt = (item['executedAt'] as String?) ??
+              DateTime.now().toIso8601String();
+          final bool locked = item['isScreenLocked'] == true;
+          final bool muted = item['isAudioMuted'] != false;
+
+          await _databaseHelper.insertHistory(
+            HistoryModel(
+              presetLabel: label,
+              durationSeconds: duration,
+              executedAt: executedAt,
+              isScreenLocked: locked,
+              isAudioMuted: muted,
+            ),
+          );
+          insertedAny = true;
+        }
+      }
+    }
+    if (insertedAny) {
+      await loadHistoryAndSummary();
+    }
+
+    // 2. Sync mute flag
+    if (stateMap.containsKey('isMuted')) {
+      _isMuted = stateMap['isMuted'] == true;
+    }
+
+    // 3. Sync timer state
+    final String? statusStr = stateMap['status'] as String?;
+    final int nativeInitial =
+        (stateMap['initialSeconds'] as num?)?.toInt() ?? _initialSeconds;
+    final String? nativeLabel = stateMap['presetLabel'] as String?;
+    final int deadlineMs = (stateMap['deadlineMs'] as num?)?.toInt() ?? 0;
+    final int pausedRem =
+        (stateMap['pausedRemainingSeconds'] as num?)?.toInt() ?? 0;
+
+    if (statusStr == 'running' && deadlineMs > 0) {
+      _initialSeconds = nativeInitial > 0 ? nativeInitial : _initialSeconds;
+      if (nativeLabel != null && nativeLabel.isNotEmpty) {
+        _activePresetLabel = nativeLabel;
+      }
+      _deadline = DateTime.fromMillisecondsSinceEpoch(deadlineMs);
+      _timerStatus = TimerStatus.running;
+      _syncFromClock();
+      _ensureHeartbeatRunning();
+    } else if (statusStr == 'paused') {
+      _countdownTimer?.cancel();
+      _deadline = null;
+      _initialSeconds = nativeInitial > 0 ? nativeInitial : _initialSeconds;
+      if (nativeLabel != null && nativeLabel.isNotEmpty) {
+        _activePresetLabel = nativeLabel;
+      }
+      _remainingSeconds = pausedRem > 0 ? pausedRem : _remainingSeconds;
+      _timerStatus = TimerStatus.paused;
+      notifyListeners();
+    } else if (statusStr == 'idle' && _timerStatus != TimerStatus.idle) {
+      _countdownTimer?.cancel();
+      _deadline = null;
+      _timerStatus = TimerStatus.idle;
+      _initialSeconds = 0;
+      _remainingSeconds = 0;
+      _activePresetLabel = defaultIdleLabel;
+      notifyListeners();
+    } else {
+      notifyListeners();
+    }
   }
 
   Future<void> checkAdminStatus() async {
@@ -164,10 +286,23 @@ class TimerController extends ChangeNotifier {
         await _databaseHelper.getSetting('pitch_black_mode');
     final String? hapticVal =
         await _databaseHelper.getSetting('haptic_feedback');
+    final String? toastVal =
+        await _databaseHelper.getSetting('toast_notifications');
+    final String? onboardingVal =
+        await _databaseHelper.getSetting('onboarding_completed');
 
     _isPitchBlack = pitchBlackVal == 'true';
     _isHapticEnabled = hapticVal != 'false';
+    _isToastEnabled = toastVal != 'false';
+    _hasCompletedOnboarding = onboardingVal == 'true';
+    await _nativeControlService.setNativeToastEnabled(_isToastEnabled);
     notifyListeners();
+  }
+
+  Future<void> completeOnboarding() async {
+    _hasCompletedOnboarding = true;
+    notifyListeners();
+    await _databaseHelper.updateSetting('onboarding_completed', 'true');
   }
 
   Future<void> togglePitchBlackMode(bool enabled) async {
@@ -192,8 +327,19 @@ class TimerController extends ChangeNotifier {
     );
   }
 
+  Future<void> toggleToastNotifications(bool enabled) async {
+    _isToastEnabled = enabled;
+    notifyListeners();
+    _triggerHaptic();
+    await _nativeControlService.setNativeToastEnabled(enabled);
+    await _databaseHelper.updateSetting(
+      'toast_notifications',
+      enabled ? 'true' : 'false',
+    );
+  }
+
   // ===========================================================================
-  // MESIN HITUNG MUNDUR (CORE TIMER ENGINE)
+  // MESIN HITUNG MUNDUR BERBASIS DEADLINE (DEADLINE-BASED TIMER ENGINE)
   // ===========================================================================
 
   /// Memilih durasi baru (baik dari input manual maupun kartu preset).
@@ -203,85 +349,176 @@ class TimerController extends ChangeNotifier {
     }
     _triggerHaptic();
     _countdownTimer?.cancel();
+    _deadline = null;
     _initialSeconds = seconds;
     _remainingSeconds = seconds;
     _activePresetLabel = label.trim().isEmpty ? 'Durasi Kustom' : label.trim();
     _timerStatus = TimerStatus.idle;
+    _nativeControlService.stopNativeTimer();
     notifyListeners();
   }
 
-  /// Memulai atau menjeda hitung mundur tanpa kehilangan sisa detik.
-  void startOrPauseTimer() {
-    _triggerHaptic();
-
+  /// Memulai atau menjeda hitung mundur berbasis waktu selesai (`_deadline`).
+  /// Mengembalikan `false` jika belum ada durasi (> 0 detik) yang dipilih.
+  bool startOrPauseTimer() {
     if (_timerStatus == TimerStatus.running) {
+      _triggerHaptic();
+      _syncFromClock(allowCompletion: false);
       _countdownTimer?.cancel();
+      _deadline = null;
       _timerStatus = TimerStatus.paused;
+      _nativeControlService.pauseNativeTimer(
+        remainingSeconds: _remainingSeconds,
+        initialSeconds: _initialSeconds,
+        presetLabel: _activePresetLabel,
+      );
       notifyListeners();
-      return;
+      return true;
     }
 
     if (_remainingSeconds <= 0) {
-      _remainingSeconds = _initialSeconds > 0 ? _initialSeconds : 900;
+      if (_initialSeconds > 0) {
+        _remainingSeconds = _initialSeconds;
+      } else {
+        return false;
+      }
     }
 
+    _triggerHaptic();
+    _deadline = DateTime.now().add(Duration(seconds: _remainingSeconds));
     _timerStatus = TimerStatus.running;
     notifyListeners();
 
-    _countdownTimer?.cancel();
-    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (Timer timer) {
-      if (_remainingSeconds > 1) {
-        _remainingSeconds--;
-        notifyListeners();
-      } else {
-        _remainingSeconds = 0;
-        timer.cancel();
-        _onTimerCompleted();
-      }
-    });
+    _nativeControlService.startNativeTimer(
+      deadlineMs: _deadline!.millisecondsSinceEpoch,
+      initialSeconds: _initialSeconds,
+      presetLabel: _activePresetLabel,
+      toastEnabled: _isToastEnabled,
+    );
+
+    _ensureHeartbeatRunning();
+    return true;
   }
 
-  /// Mengembalikan angka hitung mundur ke nilai durasi awal yang dipilih.
+  /// Menambah durasi timer (mis. +10 menit / 600 detik).
+  void extendTimer({int additionalSeconds = 600}) {
+    if (additionalSeconds <= 0) {
+      return;
+    }
+    _triggerHaptic();
+    _initialSeconds += additionalSeconds;
+    if (_timerStatus == TimerStatus.running && _deadline != null) {
+      final DateTime now = DateTime.now();
+      final DateTime base = _deadline!.isAfter(now) ? _deadline! : now;
+      _deadline = base.add(Duration(seconds: additionalSeconds));
+      _syncFromClock(allowCompletion: false);
+      _nativeControlService.extendNativeTimer(
+        additionalSeconds: additionalSeconds,
+      );
+    } else {
+      _remainingSeconds += additionalSeconds;
+      if (_timerStatus == TimerStatus.paused) {
+        _nativeControlService.pauseNativeTimer(
+          remainingSeconds: _remainingSeconds,
+          initialSeconds: _initialSeconds,
+          presetLabel: _activePresetLabel,
+        );
+      }
+      notifyListeners();
+    }
+  }
+
+  void _ensureHeartbeatRunning() {
+    _countdownTimer?.cancel();
+    _countdownTimer = Timer.periodic(
+      const Duration(milliseconds: 250),
+      (_) => _syncFromClock(),
+    );
+  }
+
+  void _syncFromClock({bool allowCompletion = true}) {
+    final DateTime? target = _deadline;
+    if (target == null) {
+      return;
+    }
+
+    final int diffMs = target.difference(DateTime.now()).inMilliseconds;
+    if (diffMs <= 0 && allowCompletion) {
+      _countdownTimer?.cancel();
+      _deadline = null;
+      _remainingSeconds = 0;
+      notifyListeners();
+      _onTimerCompleted();
+      return;
+    }
+
+    final int computedSeconds = diffMs <= 0 ? 0 : ((diffMs + 999) ~/ 1000);
+    if (computedSeconds != _remainingSeconds) {
+      _remainingSeconds = computedSeconds;
+      notifyListeners();
+    }
+  }
+
+  /// Mengembalikan angka hitung mundur kembali ke 0 (`00:00:00`).
   void resetTimer() {
     _triggerHaptic();
     _countdownTimer?.cancel();
-    _remainingSeconds = _initialSeconds;
+    _deadline = null;
+    _initialSeconds = 0;
+    _remainingSeconds = 0;
+    _activePresetLabel = defaultIdleLabel;
     _timerStatus = TimerStatus.idle;
+    _nativeControlService.stopNativeTimer();
     notifyListeners();
   }
 
-  /// Dieksekusi otomatis tepat ketika `remainingSeconds` menyentuh `0`.
+  /// Dieksekusi otomatis tepat ketika batas waktu (`_deadline`) tercapai.
   Future<void> _onTimerCompleted() async {
-    _timerStatus = TimerStatus.idle;
-    notifyListeners();
-
-    if (_isHapticEnabled) {
-      HapticFeedback.heavyImpact();
+    if (_isCompleting) {
+      return;
     }
+    _isCompleting = true;
+    try {
+      final String completedLabel = _activePresetLabel;
+      final int completedDuration = _initialSeconds;
 
-    final Map<String, bool> executionResult =
-        await _nativeControlService.executeSleepAndMute();
+      _timerStatus = TimerStatus.idle;
+      _deadline = null;
+      notifyListeners();
 
-    final bool mutedSuccess = executionResult['muted'] ?? true;
-    final bool lockedSuccess = executionResult['locked'] ?? false;
+      await _nativeControlService.stopNativeTimer();
 
-    _isMuted = mutedSuccess;
-    _isAdminActive = lockedSuccess || _isAdminActive;
+      if (_isHapticEnabled) {
+        HapticFeedback.heavyImpact();
+      }
 
-    final HistoryModel completedSession = HistoryModel(
-      presetLabel: _activePresetLabel,
-      durationSeconds: _initialSeconds,
-      executedAt: DateTime.now().toIso8601String(),
-      isScreenLocked: lockedSuccess,
-      isAudioMuted: mutedSuccess,
-    );
+      final Map<String, bool> executionResult =
+          await _nativeControlService.executeSleepAndMute();
 
-    await _databaseHelper.insertHistory(completedSession);
-    await loadHistoryAndSummary();
+      final bool mutedSuccess = executionResult['muted'] ?? true;
+      final bool lockedSuccess = executionResult['locked'] ?? false;
 
-    // Kembalikan angka ke durasi awal agar siap dipakai kembali
-    _remainingSeconds = _initialSeconds;
-    notifyListeners();
+      _isMuted = mutedSuccess;
+      _isAdminActive = lockedSuccess || _isAdminActive;
+
+      final HistoryModel completedSession = HistoryModel(
+        presetLabel: completedLabel,
+        durationSeconds: completedDuration,
+        executedAt: DateTime.now().toIso8601String(),
+        isScreenLocked: lockedSuccess,
+        isAudioMuted: mutedSuccess,
+      );
+
+      await _databaseHelper.insertHistory(completedSession);
+      await loadHistoryAndSummary();
+
+      _initialSeconds = 0;
+      _remainingSeconds = 0;
+      _activePresetLabel = defaultIdleLabel;
+      notifyListeners();
+    } finally {
+      _isCompleting = false;
+    }
   }
 
   // ===========================================================================
@@ -325,6 +562,11 @@ class TimerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    if (_isObservingLifecycle) {
+      WidgetsBinding.instance.removeObserver(this);
+      _isObservingLifecycle = false;
+    }
+    _nativeControlService.setNativeTimerEventHandler(null);
     _countdownTimer?.cancel();
     super.dispose();
   }

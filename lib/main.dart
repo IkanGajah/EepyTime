@@ -16,24 +16,24 @@ void main() {
       systemNavigationBarIconBrightness: Brightness.light,
     ),
   );
-  runApp(const SleepTimerApp());
+  runApp(const EepyTimeApp());
 }
 
-typedef MyApp = SleepTimerApp;
+typedef MyApp = EepyTimeApp;
 
-class SleepTimerApp extends StatefulWidget {
+class EepyTimeApp extends StatefulWidget {
   final TimerController? controller;
 
-  const SleepTimerApp({
+  const EepyTimeApp({
     super.key,
     this.controller,
   });
 
   @override
-  State<SleepTimerApp> createState() => _SleepTimerAppState();
+  State<EepyTimeApp> createState() => _EepyTimeAppState();
 }
 
-class _SleepTimerAppState extends State<SleepTimerApp> {
+class _EepyTimeAppState extends State<EepyTimeApp> {
   late final TimerController _controller;
   late final bool _ownsController;
 
@@ -111,7 +111,7 @@ class _SleepTimerAppState extends State<SleepTimerApp> {
       listenable: _controller,
       builder: (BuildContext context, Widget? _) {
         return MaterialApp(
-          title: 'Timer Tidur Otomatis',
+          title: 'EepyTime',
           debugShowCheckedModeBanner: false,
           themeMode: ThemeMode.dark,
           darkTheme: _buildTheme(_controller.isPitchBlack),
@@ -137,12 +137,97 @@ class MainHomeScreen extends StatefulWidget {
 
 class _MainHomeScreenState extends State<MainHomeScreen> {
   int _selectedIndex = 0;
+  bool _onboardingPromptShown = false;
 
   static const List<String> _tabTitles = <String>[
-    'Timer Tidur Otomatis',
+    'EepyTime',
     'Riwayat & Analitik',
     'Pengaturan Sistem',
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_maybeShowFirstTimeOnboarding);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _maybeShowFirstTimeOnboarding();
+    });
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_maybeShowFirstTimeOnboarding);
+    super.dispose();
+  }
+
+  void _maybeShowFirstTimeOnboarding() {
+    if (!mounted || _onboardingPromptShown) {
+      return;
+    }
+    if (!widget.controller.isInitialized) {
+      return;
+    }
+    if (widget.controller.hasCompletedOnboarding ||
+        widget.controller.isAdminActive) {
+      _onboardingPromptShown = true;
+      return;
+    }
+
+    _onboardingPromptShown = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) {
+        return;
+      }
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (BuildContext dialogContext) {
+          final ColorScheme colorScheme = Theme.of(dialogContext).colorScheme;
+          return AlertDialog(
+            title: Row(
+              children: <Widget>[
+                Icon(Icons.bedtime_rounded, color: colorScheme.primary),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text('Selamat Datang di EepyTime'),
+                ),
+              ],
+            ),
+            content: const Text(
+              'EepyTime mengotomatiskan peredaman suara media (STREAM_MUSIC = 0) '
+              'dan penguncian layar penuh (Force Screen-Lock) saat Anda tertidur, '
+              'meskipun video sedang menahan layar tetap menyala.\n\n'
+              'Agar fitur Kunci Layar Otomatis dapat bekerja, berikan izin '
+              'Device Administrator terlebih dahulu. Anda dapat mencabut izin ini '
+              'kapan saja lewat tab Pengaturan.',
+            ),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () async {
+                  await widget.controller.completeOnboarding();
+                  if (dialogContext.mounted) {
+                    Navigator.of(dialogContext).pop();
+                  }
+                },
+                child: const Text('Nanti Saja'),
+              ),
+              FilledButton.icon(
+                onPressed: () async {
+                  await widget.controller.completeOnboarding();
+                  if (dialogContext.mounted) {
+                    Navigator.of(dialogContext).pop();
+                  }
+                  await widget.controller.requestAdminPermission();
+                },
+                icon: const Icon(Icons.admin_panel_settings_outlined),
+                label: const Text('Aktifkan Izin Kunci Layar'),
+              ),
+            ],
+          );
+        },
+      );
+    });
+  }
 
   @override
   Widget build(BuildContext context) {

@@ -1,6 +1,6 @@
 # PRODUCT REQUIREMENTS DOCUMENT (PRD)
 
-**Nama Proyek:** Timer Tidur Otomatis (Sleep & Mute Timer Utility)  
+**Nama Proyek:** EepyTime (Sleep & Mute Timer Utility)  
 
 **Platform Target:** Android (API Level 26 / Android 8.0 ke atas)  
 
@@ -14,7 +14,7 @@
 
 ## 1. Ringkasan Eksekutif (Product Overview)
 
-**Timer Tidur Otomatis** adalah aplikasi utilitas sistem berbasis Android yang dirancang untuk mengotomatisasi peredaman suara media (*audio suppression*) dan penguncian layar perangkat (*force screen-lock / sleep*) ketika batas waktu hitung mundur habis. Berbeda dari *sleep timer* internal bawaan aplikasi musik yang hanya menghentikan pemutaran lokal, aplikasi ini bekerja langsung pada layer kebijakan sistem operasi (*OS Policy Layer*) menggunakan `AudioManager` dan `DevicePolicyManager`. Pendekatan ini memastikan seluruh suara media mati ke titik nol dan layar terkunci sepenuhnya meskipun terdapat aplikasi video yang menahan status layar (*Wake-Lock*).
+**EepyTime** adalah aplikasi utilitas sistem berbasis Android yang dirancang untuk mengotomatisasi peredaman suara media (*audio suppression*) dan penguncian layar perangkat (*force screen-lock / sleep*) ketika batas waktu hitung mundur habis. Berbeda dari *sleep timer* internal bawaan aplikasi musik yang hanya menghentikan pemutaran lokal, aplikasi ini bekerja langsung pada layer kebijakan sistem operasi (*OS Policy Layer*) menggunakan `AudioManager` dan `DevicePolicyManager`. Pendekatan ini memastikan seluruh suara media mati ke titik nol dan layar terkunci sepenuhnya meskipun terdapat aplikasi video yang menahan status layar (*Wake-Lock*).
 
 
 
@@ -94,7 +94,7 @@
 
 * **Frontend & UI Layer:** Flutter SDK (Dart) — Menggunakan skema warna Material Design 3 Dark Mode (ramah mata di kondisi gelap).
 
-* **Local Backend / Native Bridge:** Flutter `MethodChannel` (`sleep_timer/native_control`) yang terhubung langsung ke kode Native Android (`MainActivity.kt`).
+* **Local Backend / Native Bridge:** Flutter `MethodChannel` (`eepy_time/native_control`) yang terhubung langsung ke kode Native Android (`MainActivity.kt`).
 
 * **OS Hardware APIs (Android Native):**
 
@@ -202,7 +202,7 @@
 
 ## 6. Skema Database Lokal (SQLite Schema)
 
-Nama File Database: `sleep_timer_utility.db` (Versi 1)
+Nama File Database: `eepy_time.db` (Versi 1)
 
 ### 6.1 Tabel `presets`
 ```sql
@@ -240,7 +240,7 @@ CREATE TABLE settings (
 
 ## 7. Kontrak Komunikasi Native (`MethodChannel`)
 
-* **Nama Channel:** `sleep_timer/native_control`
+* **Nama Channel:** `eepy_time/native_control`
 
 | Nama Method | Argumen | Return Type (Dart) | Deskripsi Tugas di Native Android (`MainActivity.kt`) |
 |---|---|---|---|

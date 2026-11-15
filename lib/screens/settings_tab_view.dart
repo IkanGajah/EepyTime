@@ -89,12 +89,13 @@ class SettingsTabView extends StatelessWidget {
                 color: colorScheme.primary,
               ),
               const SizedBox(height: 8),
-              Container(
-                decoration: BoxDecoration(
-                  color: cardBgColor,
+              Material(
+                color: cardBgColor,
+                shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: cardBorderColor),
+                  side: BorderSide(color: cardBorderColor),
                 ),
+                clipBehavior: Clip.antiAlias,
                 child: Column(
                   children: <Widget>[
                     SwitchListTile(
@@ -128,12 +129,13 @@ class SettingsTabView extends StatelessWidget {
                 color: colorScheme.primary,
               ),
               const SizedBox(height: 8),
-              Container(
-                decoration: BoxDecoration(
-                  color: cardBgColor,
+              Material(
+                color: cardBgColor,
+                shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: cardBorderColor),
+                  side: BorderSide(color: cardBorderColor),
                 ),
+                clipBehavior: Clip.antiAlias,
                 child: Column(
                   children: <Widget>[
                     SwitchListTile(
@@ -153,6 +155,26 @@ class SettingsTabView extends StatelessWidget {
                       value: controller.isHapticEnabled,
                       onChanged: (bool val) {
                         controller.toggleHapticFeedback(val);
+                      },
+                    ),
+                    Divider(height: 1, color: cardBorderColor),
+                    SwitchListTile(
+                      secondary: Icon(
+                        Icons.notifications_active_outlined,
+                        color: colorScheme.primary,
+                      ),
+                      title: const Text(
+                        'Notifikasi Status Timer (Toast)',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      subtitle: const Text(
+                        'Menampilkan pemberitahuan singkat (toast / snackbar) '
+                        'ketika timer EepyTime dimulai, diperpanjang, atau selesai.',
+                        style: TextStyle(fontSize: 12.5),
+                      ),
+                      value: controller.isToastEnabled,
+                      onChanged: (bool val) {
+                        controller.toggleToastNotifications(val);
                       },
                     ),
                   ],
@@ -193,7 +215,7 @@ class SettingsTabView extends StatelessWidget {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: <Widget>[
                               const Text(
-                                'Timer Tidur Otomatis',
+                                'EepyTime',
                                 style: TextStyle(
                                   fontSize: 16,
                                   fontWeight: FontWeight.bold,
@@ -216,7 +238,7 @@ class SettingsTabView extends StatelessWidget {
                     const SizedBox(height: 14),
                     _InfoTile(
                       label: 'Jembatan Native',
-                      value: 'MethodChannel (sleep_timer/native_control)',
+                      value: 'MethodChannel (eepy_time/native_control)',
                     ),
                     const SizedBox(height: 8),
                     _InfoTile(
