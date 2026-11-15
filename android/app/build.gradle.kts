@@ -7,7 +7,13 @@ plugins {
 android {
     namespace = "com.pkb.eepy_time"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = "28.2.13676359"
+    ndkVersion = "30.0.16248370"
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
