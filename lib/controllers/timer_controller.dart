@@ -68,6 +68,10 @@ class TimerController extends ChangeNotifier with WidgetsBindingObserver {
 
   bool get isAdminActive => _isAdminActive;
   bool get isMuted => _isMuted;
+  bool get isFadingOut =>
+      _timerStatus == TimerStatus.running &&
+      _remainingSeconds > 0 &&
+      _remainingSeconds <= 20;
   bool get isPitchBlack => _isPitchBlack;
   bool get isHapticEnabled => _isHapticEnabled;
   bool get isToastEnabled => _isToastEnabled;
@@ -485,8 +489,6 @@ class TimerController extends ChangeNotifier with WidgetsBindingObserver {
       _timerStatus = TimerStatus.idle;
       _deadline = null;
       notifyListeners();
-
-      await _nativeControlService.stopNativeTimer();
 
       if (_isHapticEnabled) {
         HapticFeedback.heavyImpact();

@@ -22,6 +22,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.widget.Toast
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -34,6 +35,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import kotlin.math.roundToInt
 
 class MyDeviceAdminReceiver : DeviceAdminReceiver() {
     override fun onEnabled(context: Context, intent: Intent) {
@@ -61,8 +63,14 @@ object NativeTimerManager {
     const val NOTIFICATION_ID = 1001
     private const val PREFS_NAME = "eepy_time_native_prefs"
 
+    const val DEFAULT_FADE_WINDOW_MS = 20_000L
+    private const val FADE_TICK_INTERVAL_MS = 250L
+
     private const val KEY_LAST_VOLUME = "last_volume_level"
     private const val KEY_MUTED_BY_APP = "muted_by_app"
+    private const val KEY_IS_FADING = "is_fading"
+    private const val KEY_FADE_START_VOLUME = "fade_start_volume"
+    private const val KEY_FADE_WINDOW_MS = "fade_window_ms"
     private const val KEY_TIMER_STATUS = "timer_status" // "idle" | "running" | "paused"
     private const val KEY_DEADLINE_MS = "deadline_ms"
     private const val KEY_INITIAL_SECONDS = "initial_seconds"
@@ -74,8 +82,12 @@ object NativeTimerManager {
     const val ACTION_STOP = "com.pkb.eepy_time.ACTION_STOP"
     const val ACTION_SLEEP_NOW = "com.pkb.eepy_time.ACTION_SLEEP_NOW"
     const val ACTION_EXTEND_10M = "com.pkb.eepy_time.ACTION_EXTEND_10M"
+    const val ACTION_FADE_START_ALARM = "com.pkb.eepy_time.ACTION_FADE_START_ALARM"
     const val ACTION_DEADLINE_ALARM = "com.pkb.eepy_time.ACTION_DEADLINE_ALARM"
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var fadeRunnable: Runnable? = null
+    private var fadeWakeLock: PowerManager.WakeLock? = null
     private var activeChannel: MethodChannel? = null
 
     fun attachChannel(channel: MethodChannel?) {
@@ -108,14 +120,19 @@ object NativeTimerManager {
     fun muteAudio(context: Context): Int {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val p = prefs(context)
+        val wasFading = p.getBoolean(KEY_IS_FADING, false)
         val currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-        if (currentVolume > 0) {
+        if (!wasFading && currentVolume > 0) {
             p.edit().putInt(KEY_LAST_VOLUME, currentVolume).apply()
         }
-        p.edit().putBoolean(KEY_MUTED_BY_APP, true).apply()
+        p.edit()
+            .putBoolean(KEY_IS_FADING, false)
+            .putInt(KEY_FADE_START_VOLUME, 0)
+            .putBoolean(KEY_MUTED_BY_APP, true)
+            .apply()
         audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
         val saved = p.getInt(KEY_LAST_VOLUME, -1)
-        return if (currentVolume > 0) currentVolume else maxOf(0, saved)
+        return if (!wasFading && currentVolume > 0) currentVolume else maxOf(0, saved)
     }
 
     fun restoreAudio(context: Context): Int {
@@ -129,8 +146,135 @@ object NativeTimerManager {
             (maxVolume / 2).coerceAtLeast(1)
         }
         audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVolume, 0)
-        p.edit().putBoolean(KEY_MUTED_BY_APP, false).apply()
+        p.edit()
+            .putBoolean(KEY_IS_FADING, false)
+            .putInt(KEY_FADE_START_VOLUME, 0)
+            .putBoolean(KEY_MUTED_BY_APP, false)
+            .apply()
         return targetVolume
+    }
+
+    private fun acquireFadeWakeLock(context: Context, durationMs: Long) {
+        try {
+            val pm = context.applicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager
+            val wl = fadeWakeLock ?: pm.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "EepyTime::VolumeFadeWakeLock"
+            ).apply {
+                setReferenceCounted(false)
+                fadeWakeLock = this
+            }
+            wl.acquire((durationMs + 4_000L).coerceAtMost(30_000L))
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun releaseFadeWakeLock() {
+        try {
+            if (fadeWakeLock?.isHeld == true) {
+                fadeWakeLock?.release()
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun cancelFadeLoop(context: Context, restoreVolumeIfFading: Boolean) {
+        fadeRunnable?.let { mainHandler.removeCallbacks(it) }
+        fadeRunnable = null
+        releaseFadeWakeLock()
+
+        val appCtx = context.applicationContext
+        val p = prefs(appCtx)
+        val wasFading = p.getBoolean(KEY_IS_FADING, false)
+        if (wasFading) {
+            val startVol = p.getInt(KEY_FADE_START_VOLUME, 0)
+            if (restoreVolumeIfFading && startVol > 0) {
+                val audioManager = appCtx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, startVol, 0)
+            }
+            if (restoreVolumeIfFading) {
+                p.edit()
+                    .putBoolean(KEY_IS_FADING, false)
+                    .putInt(KEY_FADE_START_VOLUME, 0)
+                    .apply()
+            }
+        }
+    }
+
+    private fun applyFadeStep(context: Context, remainingMs: Long, fadeWindowMs: Long) {
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val p = prefs(context)
+        val wasFading = p.getBoolean(KEY_IS_FADING, false)
+        val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+
+        if (!wasFading) {
+            val editor = p.edit()
+                .putBoolean(KEY_IS_FADING, true)
+                .putInt(KEY_FADE_START_VOLUME, currentVol)
+            if (currentVol > 0) {
+                editor.putInt(KEY_LAST_VOLUME, currentVol)
+            }
+            editor.apply()
+        }
+
+        val startVol = p.getInt(KEY_FADE_START_VOLUME, currentVol)
+        if (startVol <= 0 || fadeWindowMs <= 0L) {
+            return
+        }
+
+        val ratio = (remainingMs.toDouble() / fadeWindowMs.toDouble()).coerceIn(0.0, 1.0)
+        val desiredVol = (startVol * ratio).roundToInt().coerceIn(0, startVol)
+        if (desiredVol < currentVol) {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, desiredVol, 0)
+        }
+    }
+
+    fun syncVolumeFadeLoop(context: Context) {
+        val appCtx = context.applicationContext
+        fadeRunnable?.let { mainHandler.removeCallbacks(it) }
+        fadeRunnable = null
+
+        val p = prefs(appCtx)
+        val status = p.getString(KEY_TIMER_STATUS, "idle") ?: "idle"
+        val deadlineMs = p.getLong(KEY_DEADLINE_MS, 0L)
+        val fadeWindowMs = p.getLong(KEY_FADE_WINDOW_MS, DEFAULT_FADE_WINDOW_MS)
+            .coerceAtLeast(1_000L)
+
+        if (status != "running" || deadlineMs <= 0L) {
+            releaseFadeWakeLock()
+            return
+        }
+
+        val runnable = object : Runnable {
+            override fun run() {
+                val curStatus = p.getString(KEY_TIMER_STATUS, "idle") ?: "idle"
+                val curDeadline = p.getLong(KEY_DEADLINE_MS, 0L)
+                val curFadeWindow = p.getLong(KEY_FADE_WINDOW_MS, DEFAULT_FADE_WINDOW_MS)
+                    .coerceAtLeast(1_000L)
+                if (curStatus != "running" || curDeadline <= 0L) {
+                    releaseFadeWakeLock()
+                    return
+                }
+
+                val remainingMs = curDeadline - System.currentTimeMillis()
+                if (remainingMs <= 0L) {
+                    releaseFadeWakeLock()
+                    completeTimerFromNative(appCtx)
+                    return
+                }
+
+                if (remainingMs > curFadeWindow) {
+                    val waitMs = (remainingMs - curFadeWindow).coerceAtLeast(100L)
+                    mainHandler.postDelayed(this, waitMs)
+                } else {
+                    acquireFadeWakeLock(appCtx, remainingMs)
+                    applyFadeStep(appCtx, remainingMs, curFadeWindow)
+                    mainHandler.postDelayed(this, FADE_TICK_INTERVAL_MS)
+                }
+            }
+        }
+        fadeRunnable = runnable
+        mainHandler.post(runnable)
     }
 
     fun restoreAudioOnUserPresentIfNeeded(context: Context): Boolean {
@@ -166,8 +310,20 @@ object NativeTimerManager {
     }
 
     fun executeSleepAndMute(context: Context): Map<String, Boolean> {
-        muteAudio(context)
-        val isLocked = lockScreen(context)
+        val appCtx = context.applicationContext
+        cancelFadeLoop(appCtx, restoreVolumeIfFading = false)
+        cancelTimerAlarms(appCtx)
+        prefs(appCtx).edit()
+            .putString(KEY_TIMER_STATUS, "idle")
+            .putLong(KEY_DEADLINE_MS, 0L)
+            .putInt(KEY_INITIAL_SECONDS, 0)
+            .putInt(KEY_PAUSED_REMAINING_SECONDS, 0)
+            .putString(KEY_PRESET_LABEL, "Pilih Durasi / Preset")
+            .apply()
+        TimerForegroundService.stop(appCtx)
+
+        muteAudio(appCtx)
+        val isLocked = lockScreen(appCtx)
         return mapOf(
             "muted" to true,
             "locked" to isLocked
@@ -182,17 +338,26 @@ object NativeTimerManager {
         toastEnabled: Boolean
     ) {
         val appCtx = context.applicationContext
+        cancelFadeLoop(appCtx, restoreVolumeIfFading = true)
+
+        val runDurationMs = (deadlineMs - System.currentTimeMillis()).coerceAtLeast(1_000L)
+        val fadeWindowMs = minOf(DEFAULT_FADE_WINDOW_MS, runDurationMs)
+
         prefs(appCtx).edit()
             .putString(KEY_TIMER_STATUS, "running")
             .putLong(KEY_DEADLINE_MS, deadlineMs)
+            .putLong(KEY_FADE_WINDOW_MS, fadeWindowMs)
+            .putBoolean(KEY_IS_FADING, false)
+            .putInt(KEY_FADE_START_VOLUME, 0)
             .putInt(KEY_INITIAL_SECONDS, initialSeconds)
             .putInt(KEY_PAUSED_REMAINING_SECONDS, 0)
             .putString(KEY_PRESET_LABEL, presetLabel)
             .putBoolean(KEY_TOAST_ENABLED, toastEnabled)
             .apply()
 
-        scheduleExactDeadlineAlarm(appCtx, deadlineMs)
+        scheduleTimerAlarms(appCtx, deadlineMs, fadeWindowMs)
         TimerForegroundService.startOrUpdate(appCtx)
+        syncVolumeFadeLoop(appCtx)
         showToastIfEnabled(appCtx, "EepyTime dimulai: $presetLabel")
     }
 
@@ -203,6 +368,8 @@ object NativeTimerManager {
         presetLabel: String
     ) {
         val appCtx = context.applicationContext
+        cancelFadeLoop(appCtx, restoreVolumeIfFading = true)
+
         prefs(appCtx).edit()
             .putString(KEY_TIMER_STATUS, "paused")
             .putLong(KEY_DEADLINE_MS, 0L)
@@ -211,12 +378,14 @@ object NativeTimerManager {
             .putString(KEY_PRESET_LABEL, presetLabel)
             .apply()
 
-        cancelDeadlineAlarm(appCtx)
+        cancelTimerAlarms(appCtx)
         TimerForegroundService.startOrUpdate(appCtx)
     }
 
     fun stopTimer(context: Context, notifyDart: Boolean = false) {
         val appCtx = context.applicationContext
+        cancelFadeLoop(appCtx, restoreVolumeIfFading = true)
+
         prefs(appCtx).edit()
             .putString(KEY_TIMER_STATUS, "idle")
             .putLong(KEY_DEADLINE_MS, 0L)
@@ -225,7 +394,7 @@ object NativeTimerManager {
             .putString(KEY_PRESET_LABEL, "Pilih Durasi / Preset")
             .apply()
 
-        cancelDeadlineAlarm(appCtx)
+        cancelTimerAlarms(appCtx)
         TimerForegroundService.stop(appCtx)
 
         if (notifyDart) {
@@ -242,18 +411,24 @@ object NativeTimerManager {
         val newInitial = currentInitial + additionalSeconds
 
         if (status == "running") {
+            cancelFadeLoop(appCtx, restoreVolumeIfFading = true)
+
             val now = System.currentTimeMillis()
             val currentDeadline = p.getLong(KEY_DEADLINE_MS, now)
             val base = if (currentDeadline > now) currentDeadline else now
             val newDeadline = base + (additionalSeconds * 1000L)
+            val runDurationMs = (newDeadline - now).coerceAtLeast(1_000L)
+            val fadeWindowMs = minOf(DEFAULT_FADE_WINDOW_MS, runDurationMs)
 
             p.edit()
                 .putLong(KEY_DEADLINE_MS, newDeadline)
+                .putLong(KEY_FADE_WINDOW_MS, fadeWindowMs)
                 .putInt(KEY_INITIAL_SECONDS, newInitial)
                 .apply()
 
-            scheduleExactDeadlineAlarm(appCtx, newDeadline)
+            scheduleTimerAlarms(appCtx, newDeadline, fadeWindowMs)
             TimerForegroundService.startOrUpdate(appCtx)
+            syncVolumeFadeLoop(appCtx)
         } else if (status == "paused") {
             val pausedRem = p.getInt(KEY_PAUSED_REMAINING_SECONDS, 0) + additionalSeconds
             p.edit()
@@ -279,6 +454,7 @@ object NativeTimerManager {
         val p = prefs(appCtx)
         val status = p.getString(KEY_TIMER_STATUS, "idle") ?: "idle"
         if (status == "idle") {
+            cancelFadeLoop(appCtx, restoreVolumeIfFading = false)
             TimerForegroundService.stop(appCtx)
             return
         }
@@ -286,17 +462,6 @@ object NativeTimerManager {
         val initialSeconds = p.getInt(KEY_INITIAL_SECONDS, 900)
         val presetLabel = p.getString(KEY_PRESET_LABEL, "Tidur Cepat (15 Menit)")
             ?: "Tidur Cepat (15 Menit)"
-
-        p.edit()
-            .putString(KEY_TIMER_STATUS, "idle")
-            .putLong(KEY_DEADLINE_MS, 0L)
-            .putInt(KEY_INITIAL_SECONDS, 0)
-            .putInt(KEY_PAUSED_REMAINING_SECONDS, 0)
-            .putString(KEY_PRESET_LABEL, "Pilih Durasi / Preset")
-            .apply()
-
-        cancelDeadlineAlarm(appCtx)
-        TimerForegroundService.stop(appCtx)
 
         val result = executeSleepAndMute(appCtx)
         val muted = result["muted"] == true
@@ -420,42 +585,77 @@ object NativeTimerManager {
         }
     }
 
-    private fun scheduleExactDeadlineAlarm(context: Context, deadlineMs: Long) {
-        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val intent = Intent(context, TimerActionReceiver::class.java).apply {
-            action = ACTION_DEADLINE_ALARM
-            setPackage(context.packageName)
-        }
-        val pi = PendingIntent.getBroadcast(
-            context,
-            2001,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+    private fun setExactAlarmCompat(alarmManager: AlarmManager, triggerAtMs: Long, pi: PendingIntent) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
-                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, deadlineMs, pi)
+                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMs, pi)
             } else {
-                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, deadlineMs, pi)
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMs, pi)
             }
         } catch (_: SecurityException) {
-            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, deadlineMs, pi)
+            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMs, pi)
         }
     }
 
-    private fun cancelDeadlineAlarm(context: Context) {
+    private fun scheduleTimerAlarms(context: Context, deadlineMs: Long, fadeWindowMs: Long) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val intent = Intent(context, TimerActionReceiver::class.java).apply {
+
+        val deadlineIntent = Intent(context, TimerActionReceiver::class.java).apply {
             action = ACTION_DEADLINE_ALARM
             setPackage(context.packageName)
         }
-        val pi = PendingIntent.getBroadcast(
+        val deadlinePi = PendingIntent.getBroadcast(
             context,
             2001,
-            intent,
+            deadlineIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        alarmManager.cancel(pi)
+        setExactAlarmCompat(alarmManager, deadlineMs, deadlinePi)
+
+        val fadeStartIntent = Intent(context, TimerActionReceiver::class.java).apply {
+            action = ACTION_FADE_START_ALARM
+            setPackage(context.packageName)
+        }
+        val fadeStartPi = PendingIntent.getBroadcast(
+            context,
+            2002,
+            fadeStartIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val fadeStartAtMs = deadlineMs - fadeWindowMs
+        if (fadeStartAtMs > System.currentTimeMillis() + 500L) {
+            setExactAlarmCompat(alarmManager, fadeStartAtMs, fadeStartPi)
+        } else {
+            alarmManager.cancel(fadeStartPi)
+        }
+    }
+
+    private fun cancelTimerAlarms(context: Context) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+
+        val deadlineIntent = Intent(context, TimerActionReceiver::class.java).apply {
+            action = ACTION_DEADLINE_ALARM
+            setPackage(context.packageName)
+        }
+        val deadlinePi = PendingIntent.getBroadcast(
+            context,
+            2001,
+            deadlineIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        alarmManager.cancel(deadlinePi)
+
+        val fadeStartIntent = Intent(context, TimerActionReceiver::class.java).apply {
+            action = ACTION_FADE_START_ALARM
+            setPackage(context.packageName)
+        }
+        val fadeStartPi = PendingIntent.getBroadcast(
+            context,
+            2002,
+            fadeStartIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        alarmManager.cancel(fadeStartPi)
     }
 
     fun ensureNotificationChannel(context: Context) {
@@ -586,6 +786,10 @@ class TimerActionReceiver : BroadcastReceiver() {
             NativeTimerManager.ACTION_EXTEND_10M -> {
                 NativeTimerManager.extendTimer(context, additionalSeconds = 600, notifyDart = true)
             }
+            NativeTimerManager.ACTION_FADE_START_ALARM -> {
+                TimerForegroundService.startOrUpdate(context)
+                NativeTimerManager.syncVolumeFadeLoop(context)
+            }
             NativeTimerManager.ACTION_DEADLINE_ALARM -> {
                 NativeTimerManager.completeTimerFromNative(context)
             }
@@ -632,6 +836,7 @@ class TimerForegroundService : Service() {
             }
         } catch (_: Exception) {
         }
+        NativeTimerManager.syncVolumeFadeLoop(this)
         return START_STICKY
     }
 

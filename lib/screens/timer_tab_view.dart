@@ -439,13 +439,19 @@ class _TimerTabViewState extends State<TimerTabView>
                 color: statusColor,
               ),
               _StatusChip(
-                icon: _controller.isMuted
-                    ? Icons.volume_off_rounded
-                    : Icons.volume_up_rounded,
-                label: _controller.isMuted ? 'AUDIO TEREDAM' : 'AUDIO NORMAL',
-                color: _controller.isMuted
-                    ? Colors.redAccent
-                    : Colors.tealAccent.shade400,
+                icon: _controller.isFadingOut
+                    ? Icons.trending_down_rounded
+                    : (_controller.isMuted
+                        ? Icons.volume_off_rounded
+                        : Icons.volume_up_rounded),
+                label: _controller.isFadingOut
+                    ? 'FADE-OUT AUDIO'
+                    : (_controller.isMuted ? 'AUDIO TEREDAM' : 'AUDIO NORMAL'),
+                color: _controller.isFadingOut
+                    ? Colors.amberAccent.shade400
+                    : (_controller.isMuted
+                        ? Colors.redAccent
+                        : Colors.tealAccent.shade400),
               ),
             ],
           ),
