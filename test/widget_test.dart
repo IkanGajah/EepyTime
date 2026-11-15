@@ -2,6 +2,8 @@ import 'dart:math' as math;
 
 import 'package:eepy_time/controllers/timer_controller.dart';
 import 'package:eepy_time/main.dart';
+import 'package:eepy_time/models/history_model.dart';
+import 'package:eepy_time/screens/history_tab_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -129,4 +131,58 @@ void main() {
     expect(find.text('01:15:00'), findsOneWidget);
     expect(find.text('Putaran 2 • 60m/putaran'), findsOneWidget);
   });
+
+  testWidgets(
+      'HistoryTabView displays actual sleep duration summary and omits redundant lock badges',
+      (WidgetTester tester) async {
+    final _FakeHistoryTimerController controller =
+        _FakeHistoryTimerController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(useMaterial3: true),
+        home: Scaffold(
+          body: HistoryTabView(controller: controller),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Ringkasan Kebiasaan Tidur'), findsOneWidget);
+    expect(find.text('2 Sesi'), findsOneWidget);
+    expect(find.text('14j 30m'), findsOneWidget);
+    expect(find.text('7j 15m'), findsOneWidget);
+
+    // Redundant lock/mute badges are removed
+    expect(find.textContaining('Terkunci'), findsNothing);
+    expect(find.text('Terkunci & Teredam'), findsNothing);
+
+    // Actual sleep duration and timer badge are displayed cleanly
+    expect(find.text('Tidur Cepat (15 Menit)'), findsOneWidget);
+    expect(find.text('Tidur 7 Jam 15 Menit'), findsOneWidget);
+    expect(find.text('Timer 15m'), findsOneWidget);
+  });
+}
+
+class _FakeHistoryTimerController extends TimerController {
+  @override
+  Map<String, int> get habitSummary => const <String, int>{
+        'totalSessions': 2,
+        'totalSleepSeconds': 52200, // 14h 30m
+        'averageSleepSeconds': 26100, // 7h 15m
+      };
+
+  @override
+  List<HistoryModel> get historyList => const <HistoryModel>[
+        HistoryModel(
+          id: 1,
+          sessionKey: 'sleep_1',
+          presetLabel: 'Tidur Cepat (15 Menit)',
+          durationSeconds: 900,
+          executedAt: '2026-11-14T23:00:00.000',
+          wokeUpAt: '2026-11-15T06:15:00.000',
+          sleepDurationSeconds: 26100,
+        ),
+      ];
 }

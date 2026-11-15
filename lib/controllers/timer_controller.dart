@@ -42,9 +42,8 @@ class TimerController extends ChangeNotifier with WidgetsBindingObserver {
   List<HistoryModel> _historyList = <HistoryModel>[];
   Map<String, int> _habitSummary = const <String, int>{
     'totalSessions': 0,
-    'successfulSessions': 0,
-    'totalDurationSeconds': 0,
-    'averageDurationSeconds': 0,
+    'totalSleepSeconds': 0,
+    'averageSleepSeconds': 0,
   };
 
   TimerController({
@@ -152,26 +151,39 @@ class TimerController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> _applyNativeStateMap(Map<String, Object?> stateMap) async {
-    // 1. Flush any completions executed natively (e.g. "Tidur Sekarang" button or background alarm)
+    // 1. Simpan sesi tidur yang telah selesai (saat layar dibuka kembali / bangun tidur)
     final Object? rawPending = stateMap['pendingCompletions'];
     bool insertedAny = false;
     if (rawPending is List<Object?> && rawPending.isNotEmpty) {
       for (final Object? item in rawPending) {
         if (item is Map<Object?, Object?>) {
+          final String? rawSessionKey = item['sessionKey'] as String?;
           final String label =
               (item['presetLabel'] as String?) ?? _activePresetLabel;
           final int duration =
               (item['durationSeconds'] as num?)?.toInt() ?? _initialSeconds;
           final String executedAt = (item['executedAt'] as String?) ??
               DateTime.now().toIso8601String();
-          final bool locked = item['isScreenLocked'] == true;
+          final String? rawWokeUp = item['wokeUpAt'] as String?;
+          final int? sleepSeconds =
+              (item['sleepDurationSeconds'] as num?)?.toInt();
+          final bool locked = item['isScreenLocked'] != false;
           final bool muted = item['isAudioMuted'] != false;
 
           await _databaseHelper.insertHistory(
             HistoryModel(
+              sessionKey: (rawSessionKey != null && rawSessionKey.isNotEmpty)
+                  ? rawSessionKey
+                  : null,
               presetLabel: label,
               durationSeconds: duration,
               executedAt: executedAt,
+              wokeUpAt:
+                  (rawWokeUp != null && rawWokeUp.isNotEmpty) ? rawWokeUp : null,
+              sleepDurationSeconds:
+                  (sleepSeconds != null && sleepSeconds > 0)
+                      ? sleepSeconds
+                      : null,
               isScreenLocked: locked,
               isAudioMuted: muted,
             ),
@@ -217,7 +229,8 @@ class TimerController extends ChangeNotifier with WidgetsBindingObserver {
       _remainingSeconds = pausedRem > 0 ? pausedRem : _remainingSeconds;
       _timerStatus = TimerStatus.paused;
       notifyListeners();
-    } else if (statusStr == 'idle' && _timerStatus != TimerStatus.idle) {
+    } else if ((statusStr == 'idle' || statusStr == 'sleeping') &&
+        _timerStatus != TimerStatus.idle) {
       _countdownTimer?.cancel();
       _deadline = null;
       _timerStatus = TimerStatus.idle;
@@ -521,15 +534,14 @@ class TimerController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   /// Dieksekusi otomatis tepat ketika batas waktu (`_deadline`) tercapai.
+  /// Mengunci layar, meredam suara, dan memulai penghitungan waktu tidur aktual di layer native
+  /// hingga pengguna membuka kunci layar kembali.
   Future<void> _onTimerCompleted() async {
     if (_isCompleting) {
       return;
     }
     _isCompleting = true;
     try {
-      final String completedLabel = _activePresetLabel;
-      final int completedDuration = _initialSeconds;
-
       _timerStatus = TimerStatus.idle;
       _deadline = null;
       notifyListeners();
@@ -546,17 +558,6 @@ class TimerController extends ChangeNotifier with WidgetsBindingObserver {
 
       _isMuted = mutedSuccess;
       _isAdminActive = lockedSuccess || _isAdminActive;
-
-      final HistoryModel completedSession = HistoryModel(
-        presetLabel: completedLabel,
-        durationSeconds: completedDuration,
-        executedAt: DateTime.now().toIso8601String(),
-        isScreenLocked: lockedSuccess,
-        isAudioMuted: mutedSuccess,
-      );
-
-      await _databaseHelper.insertHistory(completedSession);
-      await loadHistoryAndSummary();
 
       _initialSeconds = 0;
       _remainingSeconds = 0;

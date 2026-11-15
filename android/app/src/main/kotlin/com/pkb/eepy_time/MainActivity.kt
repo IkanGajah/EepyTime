@@ -2,6 +2,7 @@ package com.pkb.eepy_time
 
 import android.Manifest
 import android.app.AlarmManager
+import android.app.KeyguardManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -71,7 +72,7 @@ object NativeTimerManager {
     private const val KEY_IS_FADING = "is_fading"
     private const val KEY_FADE_START_VOLUME = "fade_start_volume"
     private const val KEY_FADE_WINDOW_MS = "fade_window_ms"
-    private const val KEY_TIMER_STATUS = "timer_status" // "idle" | "running" | "paused"
+    private const val KEY_TIMER_STATUS = "timer_status" // "idle" | "running" | "paused" | "sleeping"
     private const val KEY_DEADLINE_MS = "deadline_ms"
     private const val KEY_INITIAL_SECONDS = "initial_seconds"
     private const val KEY_PAUSED_REMAINING_SECONDS = "paused_remaining_seconds"
@@ -79,9 +80,19 @@ object NativeTimerManager {
     private const val KEY_TOAST_ENABLED = "toast_enabled"
     private const val KEY_PENDING_COMPLETIONS = "pending_completions"
 
+    // Data sesi tidur aktif (dihitung sejak timer habis / layar terkunci hingga layar dibuka kembali)
+    private const val KEY_SLEEP_SESSION_KEY = "sleep_session_key"
+    private const val KEY_SLEEP_START_MS = "sleep_start_ms"
+    private const val KEY_SLEEP_START_ISO = "sleep_start_iso"
+    private const val KEY_SLEEP_PRESET_LABEL = "sleep_preset_label"
+    private const val KEY_SLEEP_TIMER_SECONDS = "sleep_timer_seconds"
+    private const val KEY_SLEEP_LOCKED = "sleep_locked"
+    private const val KEY_SLEEP_MUTED = "sleep_muted"
+
     const val ACTION_STOP = "com.pkb.eepy_time.ACTION_STOP"
     const val ACTION_SLEEP_NOW = "com.pkb.eepy_time.ACTION_SLEEP_NOW"
     const val ACTION_EXTEND_10M = "com.pkb.eepy_time.ACTION_EXTEND_10M"
+    const val ACTION_FINISH_SLEEP = "com.pkb.eepy_time.ACTION_FINISH_SLEEP"
     const val ACTION_FADE_START_ALARM = "com.pkb.eepy_time.ACTION_FADE_START_ALARM"
     const val ACTION_DEADLINE_ALARM = "com.pkb.eepy_time.ACTION_DEADLINE_ALARM"
 
@@ -277,25 +288,119 @@ object NativeTimerManager {
         mainHandler.post(runnable)
     }
 
-    fun restoreAudioOnUserPresentIfNeeded(context: Context): Boolean {
-        val p = prefs(context)
-        if (!p.getBoolean(KEY_MUTED_BY_APP, false)) {
+    private fun newIsoFormat(): SimpleDateFormat {
+        return SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US).apply {
+            timeZone = TimeZone.getDefault()
+        }
+    }
+
+    @Synchronized
+    fun onDeviceUnlockedOrPresent(
+        context: Context,
+        fromScreenOnOnly: Boolean = false,
+        forceFinish: Boolean = false
+    ): Boolean {
+        val appCtx = context.applicationContext
+        val p = prefs(appCtx)
+        val status = p.getString(KEY_TIMER_STATUS, "idle") ?: "idle"
+
+        if (status == "running") {
             return false
         }
-        if (p.getString(KEY_TIMER_STATUS, "idle") == "running") {
+
+        val km = appCtx.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        if (fromScreenOnOnly && km.isKeyguardLocked) {
+            // Pengguna hanya menyalakan layar untuk melihat jam tanpa membuka kunci
             return false
         }
-        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-        if (current > 0) {
-            p.edit().putBoolean(KEY_MUTED_BY_APP, false).apply()
-            notifyDartStateChanged(context, "volumeRestored")
-            return false
+
+        var handled = false
+
+        // 1. Jika sedang dalam Mode Tidur Aktif ("sleeping"), akhiri & catat durasi tidur aktual
+        if (status == "sleeping") {
+            val sleepStartMs = p.getLong(KEY_SLEEP_START_MS, 0L)
+            val nowMs = System.currentTimeMillis()
+            if (!forceFinish && sleepStartMs > 0L && (nowMs - sleepStartMs) < 2_500L) {
+                // Abaikan broadcast transisi sesaat tepat ketika layar baru saja dikunci
+                return false
+            }
+            if (!forceFinish && km.isKeyguardLocked) {
+                return false
+            }
+
+            val sessionKey = p.getString(KEY_SLEEP_SESSION_KEY, "sleep_$sleepStartMs")
+                ?: "sleep_$sleepStartMs"
+            val presetLabel = p.getString(KEY_SLEEP_PRESET_LABEL, "EepyTime") ?: "EepyTime"
+            val timerSeconds = p.getInt(KEY_SLEEP_TIMER_SECONDS, 0)
+            val sleepStartIso = p.getString(KEY_SLEEP_START_ISO, "")
+                ?.takeIf { it.isNotEmpty() }
+                ?: newIsoFormat().format(Date(if (sleepStartMs > 0L) sleepStartMs else nowMs))
+            val locked = p.getBoolean(KEY_SLEEP_LOCKED, true)
+            val muted = p.getBoolean(KEY_SLEEP_MUTED, true)
+
+            val wakeIso = newIsoFormat().format(Date(nowMs))
+            val sleepDurationSec = if (sleepStartMs > 0L && nowMs > sleepStartMs) {
+                ((nowMs - sleepStartMs) / 1000L).toInt().coerceAtLeast(1)
+            } else {
+                1
+            }
+
+            recordPendingCompletion(
+                appCtx,
+                sessionKey = sessionKey,
+                presetLabel = presetLabel,
+                durationSeconds = timerSeconds,
+                executedAt = sleepStartIso,
+                wokeUpAt = wakeIso,
+                sleepDurationSeconds = sleepDurationSec,
+                locked = locked,
+                muted = muted
+            )
+
+            p.edit()
+                .putString(KEY_TIMER_STATUS, "idle")
+                .remove(KEY_SLEEP_SESSION_KEY)
+                .remove(KEY_SLEEP_START_MS)
+                .remove(KEY_SLEEP_START_ISO)
+                .remove(KEY_SLEEP_PRESET_LABEL)
+                .remove(KEY_SLEEP_TIMER_SECONDS)
+                .remove(KEY_SLEEP_LOCKED)
+                .remove(KEY_SLEEP_MUTED)
+                .apply()
+
+            TimerForegroundService.stop(appCtx)
+            handled = true
         }
-        val restored = restoreAudio(context)
-        showToastIfEnabled(context, "EepyTime: Volume media dipulihkan ke $restored")
-        notifyDartStateChanged(context, "volumeRestored", mapOf("restoredVolume" to restored))
-        return true
+
+        // 2. Pulihkan volume media secara otomatis jika sebelumnya diredam oleh EepyTime
+        var restoredVolume: Int? = null
+        if (p.getBoolean(KEY_MUTED_BY_APP, false)) {
+            val audioManager = appCtx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+            if (current > 0) {
+                p.edit().putBoolean(KEY_MUTED_BY_APP, false).apply()
+            } else {
+                restoredVolume = restoreAudio(appCtx)
+                handled = true
+            }
+        }
+
+        if (handled) {
+            val toastMsg = if (restoredVolume != null) {
+                "EepyTime: Durasi tidur tercatat & volume dipulihkan ke $restoredVolume"
+            } else {
+                "EepyTime: Sesi tidur selesai & tercatat"
+            }
+            showToastIfEnabled(appCtx, toastMsg)
+            val extra = if (restoredVolume != null) {
+                mapOf("restoredVolume" to restoredVolume)
+            } else {
+                emptyMap()
+            }
+            notifyDartStateChanged(appCtx, "sleepFinished", extra)
+        }
+
+        return handled
     }
 
     fun lockScreen(context: Context): Boolean {
@@ -311,17 +416,12 @@ object NativeTimerManager {
 
     fun executeSleepAndMute(context: Context): Map<String, Boolean> {
         val appCtx = context.applicationContext
+        val status = prefs(appCtx).getString(KEY_TIMER_STATUS, "idle") ?: "idle"
+        if (status == "running" || status == "paused") {
+            return completeTimerFromNative(appCtx)
+        }
         cancelFadeLoop(appCtx, restoreVolumeIfFading = false)
         cancelTimerAlarms(appCtx)
-        prefs(appCtx).edit()
-            .putString(KEY_TIMER_STATUS, "idle")
-            .putLong(KEY_DEADLINE_MS, 0L)
-            .putInt(KEY_INITIAL_SECONDS, 0)
-            .putInt(KEY_PAUSED_REMAINING_SECONDS, 0)
-            .putString(KEY_PRESET_LABEL, "Pilih Durasi / Preset")
-            .apply()
-        TimerForegroundService.stop(appCtx)
-
         muteAudio(appCtx)
         val isLocked = lockScreen(appCtx)
         return mapOf(
@@ -338,6 +438,9 @@ object NativeTimerManager {
         toastEnabled: Boolean
     ) {
         val appCtx = context.applicationContext
+        if (prefs(appCtx).getString(KEY_TIMER_STATUS, "idle") == "sleeping") {
+            onDeviceUnlockedOrPresent(appCtx, forceFinish = true)
+        }
         cancelFadeLoop(appCtx, restoreVolumeIfFading = true)
 
         val runDurationMs = (deadlineMs - System.currentTimeMillis()).coerceAtLeast(1_000L)
@@ -384,6 +487,12 @@ object NativeTimerManager {
 
     fun stopTimer(context: Context, notifyDart: Boolean = false) {
         val appCtx = context.applicationContext
+        if (prefs(appCtx).getString(KEY_TIMER_STATUS, "idle") == "sleeping") {
+            if (notifyDart) {
+                onDeviceUnlockedOrPresent(appCtx, forceFinish = true)
+            }
+            return
+        }
         cancelFadeLoop(appCtx, restoreVolumeIfFading = true)
 
         prefs(appCtx).edit()
@@ -449,41 +558,62 @@ object NativeTimerManager {
         }
     }
 
-    fun completeTimerFromNative(context: Context) {
+    @Synchronized
+    fun completeTimerFromNative(context: Context): Map<String, Boolean> {
         val appCtx = context.applicationContext
         val p = prefs(appCtx)
         val status = p.getString(KEY_TIMER_STATUS, "idle") ?: "idle"
-        if (status == "idle") {
-            cancelFadeLoop(appCtx, restoreVolumeIfFading = false)
-            TimerForegroundService.stop(appCtx)
-            return
+        if (status != "running" && status != "paused") {
+            return mapOf(
+                "muted" to p.getBoolean(KEY_MUTED_BY_APP, true),
+                "locked" to isAdminActive(appCtx)
+            )
         }
 
-        val initialSeconds = p.getInt(KEY_INITIAL_SECONDS, 900)
-        val presetLabel = p.getString(KEY_PRESET_LABEL, "Tidur Cepat (15 Menit)")
-            ?: "Tidur Cepat (15 Menit)"
+        val initialSeconds = p.getInt(KEY_INITIAL_SECONDS, 0)
+        val presetLabel = p.getString(KEY_PRESET_LABEL, "EepyTime")
+            ?.takeIf { it.isNotEmpty() && it != "Pilih Durasi / Preset" }
+            ?: "EepyTime"
 
-        val result = executeSleepAndMute(appCtx)
-        val muted = result["muted"] == true
-        val locked = result["locked"] == true
+        cancelFadeLoop(appCtx, restoreVolumeIfFading = false)
+        cancelTimerAlarms(appCtx)
+
+        muteAudio(appCtx)
+        val locked = lockScreen(appCtx)
+        val muted = true
+
+        val sleepStartMs = System.currentTimeMillis()
+        val sleepStartIso = newIsoFormat().format(Date(sleepStartMs))
+        val sessionKey = "sleep_$sleepStartMs"
+
+        p.edit()
+            .putString(KEY_TIMER_STATUS, "sleeping")
+            .putLong(KEY_DEADLINE_MS, 0L)
+            .putInt(KEY_INITIAL_SECONDS, 0)
+            .putInt(KEY_PAUSED_REMAINING_SECONDS, 0)
+            .putString(KEY_PRESET_LABEL, "Pilih Durasi / Preset")
+            .putString(KEY_SLEEP_SESSION_KEY, sessionKey)
+            .putLong(KEY_SLEEP_START_MS, sleepStartMs)
+            .putString(KEY_SLEEP_START_ISO, sleepStartIso)
+            .putString(KEY_SLEEP_PRESET_LABEL, presetLabel)
+            .putInt(KEY_SLEEP_TIMER_SECONDS, initialSeconds)
+            .putBoolean(KEY_SLEEP_LOCKED, locked)
+            .putBoolean(KEY_SLEEP_MUTED, muted)
+            .apply()
+
+        // Pertahankan service dalam Mode Tidur Aktif agar deteksi buka kunci (bangun tidur)
+        // dan pemulihan volume tetap berjalan 100% akurat semalaman.
+        TimerForegroundService.startOrUpdate(appCtx)
 
         showToastIfEnabled(
             appCtx,
-            if (locked) "EepyTime selesai: Suara diredam & layar dikunci"
-            else "EepyTime selesai: Suara media diredam"
-        )
-
-        recordPendingCompletion(
-            appCtx,
-            presetLabel = presetLabel,
-            durationSeconds = initialSeconds,
-            locked = locked,
-            muted = muted
+            if (locked) "EepyTime: Layar dikunci • Menghitung waktu tidur..."
+            else "EepyTime: Suara diredam • Menghitung waktu tidur..."
         )
 
         notifyDartStateChanged(
             appCtx,
-            "timerCompleted",
+            "sleepStarted",
             mapOf(
                 "muted" to muted,
                 "locked" to locked,
@@ -491,12 +621,21 @@ object NativeTimerManager {
                 "durationSeconds" to initialSeconds
             )
         )
+
+        return mapOf(
+            "muted" to muted,
+            "locked" to locked
+        )
     }
 
     private fun recordPendingCompletion(
         context: Context,
+        sessionKey: String,
         presetLabel: String,
         durationSeconds: Int,
+        executedAt: String,
+        wokeUpAt: String,
+        sleepDurationSeconds: Int,
         locked: Boolean,
         muted: Boolean
     ) {
@@ -507,12 +646,13 @@ object NativeTimerManager {
         } catch (_: Exception) {
             JSONArray()
         }
-        val isoFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US)
-        isoFormat.timeZone = TimeZone.getDefault()
         val obj = JSONObject().apply {
+            put("sessionKey", sessionKey)
             put("presetLabel", presetLabel)
             put("durationSeconds", durationSeconds)
-            put("executedAt", isoFormat.format(Date()))
+            put("executedAt", executedAt)
+            put("wokeUpAt", wokeUpAt)
+            put("sleepDurationSeconds", sleepDurationSeconds)
             put("isScreenLocked", locked)
             put("isAudioMuted", muted)
         }
@@ -523,6 +663,9 @@ object NativeTimerManager {
     fun consumePendingCompletions(context: Context): List<Map<String, Any>> {
         val p = prefs(context)
         val raw = p.getString(KEY_PENDING_COMPLETIONS, "[]") ?: "[]"
+        if (raw == "[]") {
+            return emptyList()
+        }
         p.edit().putString(KEY_PENDING_COMPLETIONS, "[]").apply()
         val list = mutableListOf<Map<String, Any>>()
         try {
@@ -531,10 +674,13 @@ object NativeTimerManager {
                 val item = arr.getJSONObject(i)
                 list.add(
                     mapOf(
+                        "sessionKey" to item.optString("sessionKey", ""),
                         "presetLabel" to item.optString("presetLabel", "EepyTime"),
-                        "durationSeconds" to item.optInt("durationSeconds", 900),
+                        "durationSeconds" to item.optInt("durationSeconds", 0),
                         "executedAt" to item.optString("executedAt", ""),
-                        "isScreenLocked" to item.optBoolean("isScreenLocked", false),
+                        "wokeUpAt" to item.optString("wokeUpAt", ""),
+                        "sleepDurationSeconds" to item.optInt("sleepDurationSeconds", 0),
+                        "isScreenLocked" to item.optBoolean("isScreenLocked", true),
                         "isAudioMuted" to item.optBoolean("isAudioMuted", true)
                     )
                 )
@@ -548,16 +694,28 @@ object NativeTimerManager {
         val p = prefs(context)
         var status = p.getString(KEY_TIMER_STATUS, "idle") ?: "idle"
         val deadlineMs = p.getLong(KEY_DEADLINE_MS, 0L)
+
+        if (status == "running" && deadlineMs > 0L && System.currentTimeMillis() >= deadlineMs) {
+            completeTimerFromNative(context)
+            status = p.getString(KEY_TIMER_STATUS, "idle") ?: "idle"
+        }
+
+        // Jika ponsel saat ini sudah dibuka kuncinya (unlocked) setelah melewati masa tenggang kunci,
+        // selesaikan sesi tidur aktif secara otomatis.
+        if (status == "sleeping") {
+            val sleepStartMs = p.getLong(KEY_SLEEP_START_MS, 0L)
+            val km = context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+            if (!km.isKeyguardLocked && System.currentTimeMillis() - sleepStartMs >= 2_500L) {
+                onDeviceUnlockedOrPresent(context, fromScreenOnOnly = false, forceFinish = false)
+                status = p.getString(KEY_TIMER_STATUS, "idle") ?: "idle"
+            }
+        }
+
         val initialSeconds = p.getInt(KEY_INITIAL_SECONDS, 0)
         val pausedRemaining = p.getInt(KEY_PAUSED_REMAINING_SECONDS, 0)
         val presetLabel = p.getString(KEY_PRESET_LABEL, "Pilih Durasi / Preset")
             ?: "Pilih Durasi / Preset"
         val isMuted = p.getBoolean(KEY_MUTED_BY_APP, false)
-
-        if (status == "running" && deadlineMs > 0L && System.currentTimeMillis() >= deadlineMs) {
-            completeTimerFromNative(context)
-            status = "idle"
-        }
 
         return mapOf(
             "status" to status,
@@ -708,17 +866,23 @@ object NativeTimerManager {
         }
 
         val builder = Notification.Builder(context, NOTIFICATION_CHANNEL_ID)
+        val sleepStartMs = p.getLong(KEY_SLEEP_START_MS, System.currentTimeMillis())
 
-        val title = if (status == "paused") {
-            "EepyTime (Dijeda • ${formatDuration(pausedRem)})"
+        val title = when (status) {
+            "sleeping" -> "EepyTime • Mode Tidur Aktif"
+            "paused" -> "EepyTime (Dijeda • ${formatDuration(pausedRem)})"
+            else -> "EepyTime"
+        }
+        val subtitle = if (status == "sleeping") {
+            "Menghitung durasi tidur hingga layar dibuka kembali"
         } else {
-            "EepyTime"
+            label
         }
 
         builder
             .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
             .setContentTitle(title)
-            .setContentText(label)
+            .setContentText(subtitle)
             .setContentIntent(contentPi)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -730,6 +894,11 @@ object NativeTimerManager {
             builder.setShowWhen(true)
             builder.setUsesChronometer(true)
             builder.setChronometerCountDown(true)
+        } else if (status == "sleeping") {
+            builder.setWhen(sleepStartMs)
+            builder.setShowWhen(true)
+            builder.setUsesChronometer(true)
+            builder.setChronometerCountDown(false)
         } else {
             builder.setShowWhen(false)
             builder.setUsesChronometer(false)
@@ -739,27 +908,36 @@ object NativeTimerManager {
             builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
         }
 
-        val stopAction = Notification.Action.Builder(
-            0,
-            "Stop",
-            actionPi(101, ACTION_STOP)
-        ).build()
+        if (status == "sleeping") {
+            val finishSleepAction = Notification.Action.Builder(
+                0,
+                "Selesai Tidur",
+                actionPi(104, ACTION_FINISH_SLEEP)
+            ).build()
+            builder.addAction(finishSleepAction)
+        } else {
+            val stopAction = Notification.Action.Builder(
+                0,
+                "Stop",
+                actionPi(101, ACTION_STOP)
+            ).build()
 
-        val sleepNowAction = Notification.Action.Builder(
-            0,
-            "Tidur Sekarang",
-            actionPi(102, ACTION_SLEEP_NOW)
-        ).build()
+            val sleepNowAction = Notification.Action.Builder(
+                0,
+                "Tidur Sekarang",
+                actionPi(102, ACTION_SLEEP_NOW)
+            ).build()
 
-        val extendAction = Notification.Action.Builder(
-            0,
-            "+10 Menit",
-            actionPi(103, ACTION_EXTEND_10M)
-        ).build()
+            val extendAction = Notification.Action.Builder(
+                0,
+                "+10 Menit",
+                actionPi(103, ACTION_EXTEND_10M)
+            ).build()
 
-        builder.addAction(stopAction)
-        builder.addAction(sleepNowAction)
-        builder.addAction(extendAction)
+            builder.addAction(stopAction)
+            builder.addAction(sleepNowAction)
+            builder.addAction(extendAction)
+        }
 
         return builder.build()
     }
@@ -785,6 +963,9 @@ class TimerActionReceiver : BroadcastReceiver() {
             }
             NativeTimerManager.ACTION_EXTEND_10M -> {
                 NativeTimerManager.extendTimer(context, additionalSeconds = 600, notifyDart = true)
+            }
+            NativeTimerManager.ACTION_FINISH_SLEEP -> {
+                NativeTimerManager.onDeviceUnlockedOrPresent(context, forceFinish = true)
             }
             NativeTimerManager.ACTION_FADE_START_ALARM -> {
                 TimerForegroundService.startOrUpdate(context)
@@ -822,7 +1003,59 @@ class TimerForegroundService : Service() {
         }
     }
 
+    private var unlockReceiverRegistered = false
+
+    private val unlockReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val ctx = context ?: return
+            when (intent?.action) {
+                Intent.ACTION_USER_PRESENT -> {
+                    NativeTimerManager.onDeviceUnlockedOrPresent(ctx, fromScreenOnOnly = false)
+                }
+                Intent.ACTION_SCREEN_ON -> {
+                    NativeTimerManager.onDeviceUnlockedOrPresent(ctx, fromScreenOnOnly = true)
+                }
+            }
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        registerUnlockReceiverIfNeeded()
+    }
+
+    override fun onDestroy() {
+        if (unlockReceiverRegistered) {
+            try {
+                unregisterReceiver(unlockReceiver)
+            } catch (_: Exception) {
+            }
+            unlockReceiverRegistered = false
+        }
+        super.onDestroy()
+    }
+
+    private fun registerUnlockReceiverIfNeeded() {
+        if (unlockReceiverRegistered) {
+            return
+        }
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_USER_PRESENT)
+            addAction(Intent.ACTION_SCREEN_ON)
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(unlockReceiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                registerReceiver(unlockReceiver, filter)
+            }
+            unlockReceiverRegistered = true
+        } catch (_: Exception) {
+        }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        registerUnlockReceiverIfNeeded()
         val notification = NativeTimerManager.buildTimerNotification(this)
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -849,7 +1082,7 @@ class MainActivity : FlutterActivity() {
     private val userPresentReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == Intent.ACTION_USER_PRESENT && context != null) {
-                NativeTimerManager.restoreAudioOnUserPresentIfNeeded(context)
+                NativeTimerManager.onDeviceUnlockedOrPresent(context, fromScreenOnOnly = false)
             }
         }
     }
