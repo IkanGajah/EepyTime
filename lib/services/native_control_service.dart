@@ -1,18 +1,47 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
-/// Service wrapper untuk jembatan komunikasi MethodChannel (`sleep_timer/native_control`)
-/// menuju API sistem operasi Android (`DevicePolicyManager` dan `AudioManager`).
+typedef NativeTimerEventHandler = Future<void> Function(
+  Map<String, Object?> payload,
+);
+
+/// Service wrapper untuk jembatan komunikasi MethodChannel (`eepy_time/native_control`)
+/// menuju API sistem operasi Android (`DevicePolicyManager`, `AudioManager`,
+/// `AlarmManager`, dan `TimerForegroundService`).
 class NativeControlService {
-  NativeControlService._internal();
+  NativeControlService._internal() {
+    _channel.setMethodCallHandler(_handleIncomingCall);
+  }
 
   static final NativeControlService instance = NativeControlService._internal();
 
   factory NativeControlService() => instance;
 
   static const MethodChannel _channel = MethodChannel(
-    'sleep_timer/native_control',
+    'eepy_time/native_control',
   );
+
+  NativeTimerEventHandler? _eventHandler;
+
+  void setNativeTimerEventHandler(NativeTimerEventHandler? handler) {
+    _eventHandler = handler;
+  }
+
+  Future<dynamic> _handleIncomingCall(MethodCall call) async {
+    if (call.method == 'onNativeTimerEvent') {
+      final Object? rawArgs = call.arguments;
+      if (rawArgs is Map<Object?, Object?> && _eventHandler != null) {
+        final Map<String, Object?> normalized = <String, Object?>{};
+        rawArgs.forEach((Object? key, Object? value) {
+          if (key is String) {
+            normalized[key] = value;
+          }
+        });
+        await _eventHandler!(normalized);
+      }
+    }
+    return null;
+  }
 
   /// Memeriksa apakah izin Device Administrator (`lockNow`) saat ini aktif.
   Future<bool> checkAdmin() async {
@@ -20,10 +49,14 @@ class NativeControlService {
       final bool? isActive = await _channel.invokeMethod<bool>('checkAdmin');
       return isActive ?? false;
     } on PlatformException catch (e) {
-      debugPrint('NativeControlService.checkAdmin PlatformException: ${e.message}');
+      debugPrint(
+        'NativeControlService.checkAdmin PlatformException: ${e.message}',
+      );
       return false;
     } on MissingPluginException catch (e) {
-      debugPrint('NativeControlService.checkAdmin MissingPluginException: ${e.message}');
+      debugPrint(
+        'NativeControlService.checkAdmin MissingPluginException: ${e.message}',
+      );
       return false;
     }
   }
@@ -34,10 +67,14 @@ class NativeControlService {
       final bool? launched = await _channel.invokeMethod<bool>('requestAdmin');
       return launched ?? false;
     } on PlatformException catch (e) {
-      debugPrint('NativeControlService.requestAdmin PlatformException: ${e.message}');
+      debugPrint(
+        'NativeControlService.requestAdmin PlatformException: ${e.message}',
+      );
       return false;
     } on MissingPluginException catch (e) {
-      debugPrint('NativeControlService.requestAdmin MissingPluginException: ${e.message}');
+      debugPrint(
+        'NativeControlService.requestAdmin MissingPluginException: ${e.message}',
+      );
       return false;
     }
   }
@@ -49,10 +86,14 @@ class NativeControlService {
       final bool? revoked = await _channel.invokeMethod<bool>('revokeAdmin');
       return revoked ?? false;
     } on PlatformException catch (e) {
-      debugPrint('NativeControlService.revokeAdmin PlatformException: ${e.message}');
+      debugPrint(
+        'NativeControlService.revokeAdmin PlatformException: ${e.message}',
+      );
       return false;
     } on MissingPluginException catch (e) {
-      debugPrint('NativeControlService.revokeAdmin MissingPluginException: ${e.message}');
+      debugPrint(
+        'NativeControlService.revokeAdmin MissingPluginException: ${e.message}',
+      );
       return false;
     }
   }
@@ -64,10 +105,14 @@ class NativeControlService {
       final int? previousVolume = await _channel.invokeMethod<int>('muteAudio');
       return previousVolume ?? 0;
     } on PlatformException catch (e) {
-      debugPrint('NativeControlService.muteAudio PlatformException: ${e.message}');
+      debugPrint(
+        'NativeControlService.muteAudio PlatformException: ${e.message}',
+      );
       return 0;
     } on MissingPluginException catch (e) {
-      debugPrint('NativeControlService.muteAudio MissingPluginException: ${e.message}');
+      debugPrint(
+        'NativeControlService.muteAudio MissingPluginException: ${e.message}',
+      );
       return 0;
     }
   }
@@ -76,13 +121,18 @@ class NativeControlService {
   /// Mengembalikan level volume setelah dipulihkan.
   Future<int> restoreAudio() async {
     try {
-      final int? restoredVolume = await _channel.invokeMethod<int>('restoreAudio');
+      final int? restoredVolume =
+          await _channel.invokeMethod<int>('restoreAudio');
       return restoredVolume ?? 0;
     } on PlatformException catch (e) {
-      debugPrint('NativeControlService.restoreAudio PlatformException: ${e.message}');
+      debugPrint(
+        'NativeControlService.restoreAudio PlatformException: ${e.message}',
+      );
       return 0;
     } on MissingPluginException catch (e) {
-      debugPrint('NativeControlService.restoreAudio MissingPluginException: ${e.message}');
+      debugPrint(
+        'NativeControlService.restoreAudio MissingPluginException: ${e.message}',
+      );
       return 0;
     }
   }
@@ -94,10 +144,14 @@ class NativeControlService {
       final bool? isLocked = await _channel.invokeMethod<bool>('lockScreen');
       return isLocked ?? false;
     } on PlatformException catch (e) {
-      debugPrint('NativeControlService.lockScreen PlatformException: ${e.message}');
+      debugPrint(
+        'NativeControlService.lockScreen PlatformException: ${e.message}',
+      );
       return false;
     } on MissingPluginException catch (e) {
-      debugPrint('NativeControlService.lockScreen MissingPluginException: ${e.message}');
+      debugPrint(
+        'NativeControlService.lockScreen MissingPluginException: ${e.message}',
+      );
       return false;
     }
   }
@@ -128,6 +182,154 @@ class NativeControlService {
         'NativeControlService.executeSleepAndMute MissingPluginException: ${e.message}',
       );
       return const <String, bool>{'muted': false, 'locked': false};
+    }
+  }
+
+  /// Memulai atau memperbarui notifikasi foreground service dan alarm batas waktu native.
+  Future<bool> startNativeTimer({
+    required int deadlineMs,
+    required int initialSeconds,
+    required String presetLabel,
+    bool toastEnabled = true,
+  }) async {
+    try {
+      final bool? ok = await _channel.invokeMethod<bool>(
+        'startNativeTimer',
+        <String, Object>{
+          'deadlineMs': deadlineMs,
+          'initialSeconds': initialSeconds,
+          'presetLabel': presetLabel,
+          'toastEnabled': toastEnabled,
+        },
+      );
+      return ok ?? false;
+    } on PlatformException catch (e) {
+      debugPrint(
+        'NativeControlService.startNativeTimer PlatformException: ${e.message}',
+      );
+      return false;
+    } on MissingPluginException catch (e) {
+      debugPrint(
+        'NativeControlService.startNativeTimer MissingPluginException: ${e.message}',
+      );
+      return false;
+    }
+  }
+
+  /// Mengatur status aktif/nonaktif notifikasi Toast native Android.
+  Future<bool> setNativeToastEnabled(bool enabled) async {
+    try {
+      final bool? ok = await _channel.invokeMethod<bool>(
+        'setNativeToastEnabled',
+        <String, Object>{'enabled': enabled},
+      );
+      return ok ?? false;
+    } on PlatformException catch (e) {
+      debugPrint(
+        'NativeControlService.setNativeToastEnabled PlatformException: ${e.message}',
+      );
+      return false;
+    } on MissingPluginException catch (e) {
+      debugPrint(
+        'NativeControlService.setNativeToastEnabled MissingPluginException: ${e.message}',
+      );
+      return false;
+    }
+  }
+
+  /// Menjeda notifikasi foreground service dan membatalkan alarm batas waktu native.
+  Future<bool> pauseNativeTimer({
+    required int remainingSeconds,
+    required int initialSeconds,
+    required String presetLabel,
+  }) async {
+    try {
+      final bool? ok = await _channel.invokeMethod<bool>(
+        'pauseNativeTimer',
+        <String, Object>{
+          'remainingSeconds': remainingSeconds,
+          'initialSeconds': initialSeconds,
+          'presetLabel': presetLabel,
+        },
+      );
+      return ok ?? false;
+    } on PlatformException catch (e) {
+      debugPrint(
+        'NativeControlService.pauseNativeTimer PlatformException: ${e.message}',
+      );
+      return false;
+    } on MissingPluginException catch (e) {
+      debugPrint(
+        'NativeControlService.pauseNativeTimer MissingPluginException: ${e.message}',
+      );
+      return false;
+    }
+  }
+
+  /// Menghentikan notifikasi foreground service dan membatalkan alarm native.
+  Future<bool> stopNativeTimer() async {
+    try {
+      final bool? ok = await _channel.invokeMethod<bool>('stopNativeTimer');
+      return ok ?? false;
+    } on PlatformException catch (e) {
+      debugPrint(
+        'NativeControlService.stopNativeTimer PlatformException: ${e.message}',
+      );
+      return false;
+    } on MissingPluginException catch (e) {
+      debugPrint(
+        'NativeControlService.stopNativeTimer MissingPluginException: ${e.message}',
+      );
+      return false;
+    }
+  }
+
+  /// Menambah durasi timer aktif pada sisi native (mis. +600 detik / 10 menit).
+  Future<bool> extendNativeTimer({int additionalSeconds = 600}) async {
+    try {
+      final bool? ok = await _channel.invokeMethod<bool>(
+        'extendNativeTimer',
+        <String, Object>{'additionalSeconds': additionalSeconds},
+      );
+      return ok ?? false;
+    } on PlatformException catch (e) {
+      debugPrint(
+        'NativeControlService.extendNativeTimer PlatformException: ${e.message}',
+      );
+      return false;
+    } on MissingPluginException catch (e) {
+      debugPrint(
+        'NativeControlService.extendNativeTimer MissingPluginException: ${e.message}',
+      );
+      return false;
+    }
+  }
+
+  /// Mengambil status timer & antrean penyelesaian sesi dari sisi native Android.
+  Future<Map<String, Object?>?> getNativeTimerState() async {
+    try {
+      final Map<Object?, Object?>? raw = await _channel
+          .invokeMethod<Map<Object?, Object?>>('getNativeTimerState');
+      if (raw == null) {
+        return null;
+      }
+      final Map<String, Object?> normalized = <String, Object?>{};
+      raw.forEach((Object? key, Object? value) {
+        if (key is String) {
+          normalized[key] = value;
+        }
+      });
+      return normalized;
+    } on PlatformException catch (e) {
+      debugPrint(
+        'NativeControlService.getNativeTimerState PlatformException: ${e.message}',
+      );
+      return null;
+    } on MissingPluginException catch (e) {
+      debugPrint(
+        'NativeControlService.getNativeTimerState MissingPluginException: ${e.message}',
+      );
+      return null;
     }
   }
 }

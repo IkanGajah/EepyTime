@@ -40,9 +40,30 @@ class HistoryTabView extends StatelessWidget {
     return '$day $month $year • $hour:$minute:$second';
   }
 
+  String _formatShortDate(String isoString) {
+    final DateTime? parsed = DateTime.tryParse(isoString)?.toLocal();
+    if (parsed == null) {
+      return isoString;
+    }
+    final String day = parsed.day.toString().padLeft(2, '0');
+    final String month = _monthNames[parsed.month - 1];
+    final String year = parsed.year.toString();
+    return '$day $month $year';
+  }
+
+  String _formatClockHm(String isoString) {
+    final DateTime? parsed = DateTime.tryParse(isoString)?.toLocal();
+    if (parsed == null) {
+      return '--:--';
+    }
+    final String hour = parsed.hour.toString().padLeft(2, '0');
+    final String minute = parsed.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
+  }
+
   String _formatCompactDuration(int totalSeconds) {
     if (totalSeconds <= 0) {
-      return '0 dtk';
+      return '0m';
     }
     final int hours = totalSeconds ~/ 3600;
     final int minutes = (totalSeconds % 3600) ~/ 60;
@@ -72,7 +93,7 @@ class HistoryTabView extends StatelessWidget {
     if (minutes > 0) {
       parts.add('$minutes Menit');
     }
-    if (seconds > 0) {
+    if (seconds > 0 && hours == 0) {
       parts.add('$seconds Detik');
     }
     return parts.join(' ');
@@ -91,8 +112,8 @@ class HistoryTabView extends StatelessWidget {
             ],
           ),
           content: const Text(
-            'Seluruh log sesi pemakaian dan statistik ringkasan kebiasaan akan '
-            'dihapus secara permanen dari database lokal.',
+            'Seluruh riwayat sesi tidur dan statistik ringkasan kebiasaan akan '
+            'dihapus secara permanen dari penyimpanan lokal.',
           ),
           actions: <Widget>[
             TextButton(
@@ -117,7 +138,7 @@ class HistoryTabView extends StatelessWidget {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Seluruh riwayat pemakaian berhasil dibersihkan.'),
+            content: Text('Seluruh riwayat tidur berhasil dibersihkan.'),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -131,6 +152,10 @@ class HistoryTabView extends StatelessWidget {
   ) {
     final ColorScheme colorScheme = Theme.of(context).colorScheme;
     final bool isPitchBlack = controller.isPitchBlack;
+    final int? sleepSec = session.sleepDurationSeconds;
+    final bool hasSleepDuration = sleepSec != null && sleepSec > 0;
+    final bool hasWakeTime =
+        session.wokeUpAt != null && session.wokeUpAt!.isNotEmpty;
 
     showModalBottomSheet<void>(
       context: context,
@@ -162,16 +187,11 @@ class HistoryTabView extends StatelessWidget {
                 children: <Widget>[
                   CircleAvatar(
                     radius: 22,
-                    backgroundColor: session.isScreenLocked
-                        ? Colors.tealAccent.shade700.withValues(alpha: 0.2)
-                        : Colors.amber.shade800.withValues(alpha: 0.2),
+                    backgroundColor:
+                        colorScheme.primaryContainer.withValues(alpha: 0.35),
                     child: Icon(
-                      session.isScreenLocked
-                          ? Icons.lock_clock_rounded
-                          : Icons.volume_off_rounded,
-                      color: session.isScreenLocked
-                          ? Colors.tealAccent.shade400
-                          : Colors.amber.shade400,
+                      Icons.nights_stay_rounded,
+                      color: colorScheme.primary,
                     ),
                   ),
                   const SizedBox(width: 14),
@@ -180,21 +200,19 @@ class HistoryTabView extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
                         const Text(
-                          'Detail Sesi Timer Tidur',
+                          'Detail Sesi Tidur',
                           style: TextStyle(
                             fontSize: 17,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
                         Text(
-                          session.isScreenLocked
-                              ? 'Terkunci Penuh & Suara Diredam'
-                              : 'Hanya Suara Diredam (Tanpa Kunci Layar)',
+                          hasSleepDuration
+                              ? 'Durasi Tidur: ${_formatFullDuration(sleepSec)}'
+                              : session.presetLabel,
                           style: TextStyle(
                             fontSize: 12.5,
-                            color: session.isScreenLocked
-                                ? Colors.tealAccent.shade400
-                                : Colors.amber.shade300,
+                            color: Colors.tealAccent.shade400,
                           ),
                         ),
                       ],
@@ -207,43 +225,37 @@ class HistoryTabView extends StatelessWidget {
               const SizedBox(height: 14),
               _DetailRow(
                 icon: Icons.label_outline_rounded,
-                label: 'Nama Preset',
+                label: 'Preset / Mode',
                 value: session.presetLabel,
               ),
               const SizedBox(height: 12),
               _DetailRow(
-                icon: Icons.timer_outlined,
-                label: 'Durasi Timer',
-                value:
-                    '${_formatFullDuration(session.durationSeconds)} (${TimerController.formatDuration(session.durationSeconds)})',
+                icon: Icons.bedtime_outlined,
+                label: 'Durasi Tidur Aktual',
+                value: hasSleepDuration
+                    ? '${_formatFullDuration(sleepSec)} (${TimerController.formatDuration(sleepSec)})'
+                    : 'Belum tercatat (sesi lama)',
+                valueColor:
+                    hasSleepDuration ? Colors.tealAccent.shade400 : null,
               ),
               const SizedBox(height: 12),
               _DetailRow(
-                icon: Icons.calendar_today_outlined,
-                label: 'Waktu Eksekusi',
+                icon: Icons.lock_clock_outlined,
+                label: 'Mulai Tidur (Layar Terkunci)',
                 value: _formatDateTime(session.executedAt),
               ),
               const SizedBox(height: 12),
               _DetailRow(
-                icon: Icons.screen_lock_portrait_rounded,
-                label: 'Status Kunci Layar',
-                value: session.isScreenLocked
-                    ? 'Berhasil Terkunci (DevicePolicyManager.lockNow)'
-                    : 'Gagal / Tanpa Izin Device Admin',
-                valueColor: session.isScreenLocked
-                    ? Colors.tealAccent.shade400
-                    : Colors.amber.shade400,
+                icon: Icons.wb_sunny_outlined,
+                label: 'Bangun Tidur (Layar Dibuka)',
+                value: hasWakeTime ? _formatDateTime(session.wokeUpAt!) : '-',
               ),
               const SizedBox(height: 12),
               _DetailRow(
-                icon: Icons.volume_off_rounded,
-                label: 'Status Peredam Suara',
-                value: session.isAudioMuted
-                    ? 'Suara Media Diredam (STREAM_MUSIC = 0)'
-                    : 'Tidak Diredam',
-                valueColor: session.isAudioMuted
-                    ? Colors.tealAccent.shade400
-                    : Colors.redAccent,
+                icon: Icons.timer_outlined,
+                label: 'Durasi Timer Sebelum Tidur',
+                value:
+                    '${_formatFullDuration(session.durationSeconds)} (${TimerController.formatDuration(session.durationSeconds)})',
               ),
               const SizedBox(height: 22),
               FilledButton.tonal(
@@ -273,9 +285,8 @@ class HistoryTabView extends StatelessWidget {
 
         final Map<String, int> summary = controller.habitSummary;
         final int totalSessions = summary['totalSessions'] ?? 0;
-        final int successfulSessions = summary['successfulSessions'] ?? 0;
-        final int totalSeconds = summary['totalDurationSeconds'] ?? 0;
-        final int avgSeconds = summary['averageDurationSeconds'] ?? 0;
+        final int totalSleepSeconds = summary['totalSleepSeconds'] ?? 0;
+        final int avgSleepSeconds = summary['averageSleepSeconds'] ?? 0;
         final List<HistoryModel> history = controller.historyList;
 
         return SingleChildScrollView(
@@ -283,7 +294,7 @@ class HistoryTabView extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              // 1. KARTU RINGKASAN KEBIASAAN (HABIT ANALYTICS)
+              // 1. KARTU RINGKASAN KEBIASAAN TIDUR
               Container(
                 padding: const EdgeInsets.all(18),
                 decoration: BoxDecoration(
@@ -311,25 +322,6 @@ class HistoryTabView extends StatelessWidget {
                             ),
                           ),
                         ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: colorScheme.primaryContainer
-                                .withValues(alpha: 0.4),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(
-                            '$successfulSessions/$totalSessions Terkunci',
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: colorScheme.primary,
-                            ),
-                          ),
-                        ),
                       ],
                     ),
                     const SizedBox(height: 14),
@@ -337,7 +329,7 @@ class HistoryTabView extends StatelessWidget {
                       children: <Widget>[
                         Expanded(
                           child: _HabitMetricItem(
-                            icon: Icons.check_circle_outline_rounded,
+                            icon: Icons.bedtime_outlined,
                             title: 'Total Sesi',
                             value: '$totalSessions Sesi',
                             color: Colors.tealAccent.shade400,
@@ -347,8 +339,8 @@ class HistoryTabView extends StatelessWidget {
                         Expanded(
                           child: _HabitMetricItem(
                             icon: Icons.schedule_rounded,
-                            title: 'Total Waktu',
-                            value: _formatCompactDuration(totalSeconds),
+                            title: 'Total Tidur',
+                            value: _formatCompactDuration(totalSleepSeconds),
                             color: colorScheme.primary,
                           ),
                         ),
@@ -356,8 +348,8 @@ class HistoryTabView extends StatelessWidget {
                         Expanded(
                           child: _HabitMetricItem(
                             icon: Icons.nights_stay_outlined,
-                            title: 'Rata-rata',
-                            value: _formatCompactDuration(avgSeconds),
+                            title: 'Rata-rata Tidur',
+                            value: _formatCompactDuration(avgSleepSeconds),
                             color: Colors.amberAccent.shade200,
                           ),
                         ),
@@ -372,22 +364,27 @@ class HistoryTabView extends StatelessWidget {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: <Widget>[
-                  Row(
-                    children: <Widget>[
-                      Icon(
-                        Icons.history_rounded,
-                        size: 20,
-                        color: colorScheme.primary,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Riwayat Pemakaian (${history.length})',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
+                  Expanded(
+                    child: Row(
+                      children: <Widget>[
+                        Icon(
+                          Icons.history_rounded,
+                          size: 20,
+                          color: colorScheme.primary,
                         ),
-                      ),
-                    ],
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            'Riwayat Tidur (${history.length})',
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                   if (history.isNotEmpty)
                     TextButton.icon(
@@ -424,7 +421,7 @@ class HistoryTabView extends StatelessWidget {
                       ),
                       const SizedBox(height: 12),
                       const Text(
-                        'Belum Ada Riwayat Pemakaian',
+                        'Belum Ada Riwayat Tidur',
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 15,
@@ -432,8 +429,8 @@ class HistoryTabView extends StatelessWidget {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        'Setiap sesi hitung mundur yang selesai dieksekusi '
-                        'akan tercatat secara otomatis di sini.',
+                        'Durasi tidur akan tercatat otomatis sejak timer selesai '
+                        '(layar terkunci) hingga layar dibuka kembali.',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           fontSize: 13,
@@ -451,7 +448,15 @@ class HistoryTabView extends StatelessWidget {
                   separatorBuilder: (_, _) => const SizedBox(height: 8),
                   itemBuilder: (BuildContext context, int index) {
                     final HistoryModel item = history[index];
-                    final bool fullyLocked = item.isScreenLocked;
+                    final int? sleepSec = item.sleepDurationSeconds;
+                    final bool hasSleepDuration =
+                        sleepSec != null && sleepSec > 0;
+                    final bool hasWakeTime =
+                        item.wokeUpAt != null && item.wokeUpAt!.isNotEmpty;
+
+                    final String timeRangeLine = hasWakeTime
+                        ? '${_formatShortDate(item.executedAt)} • ${_formatClockHm(item.executedAt)} → ${_formatClockHm(item.wokeUpAt!)}'
+                        : _formatDateTime(item.executedAt);
 
                     return Material(
                       color: cardBgColor,
@@ -470,18 +475,11 @@ class HistoryTabView extends StatelessWidget {
                             children: <Widget>[
                               CircleAvatar(
                                 radius: 20,
-                                backgroundColor: fullyLocked
-                                    ? Colors.tealAccent.shade700
-                                        .withValues(alpha: 0.18)
-                                    : Colors.amber.shade800
-                                        .withValues(alpha: 0.2),
+                                backgroundColor: colorScheme.primaryContainer
+                                    .withValues(alpha: 0.35),
                                 child: Icon(
-                                  fullyLocked
-                                      ? Icons.screen_lock_portrait_rounded
-                                      : Icons.volume_off_rounded,
-                                  color: fullyLocked
-                                      ? Colors.tealAccent.shade400
-                                      : Colors.amber.shade400,
+                                  Icons.nights_stay_rounded,
+                                  color: colorScheme.primary,
                                   size: 20,
                                 ),
                               ),
@@ -499,38 +497,76 @@ class HistoryTabView extends StatelessWidget {
                                     ),
                                     const SizedBox(height: 3),
                                     Text(
-                                      'Durasi: ${_formatFullDuration(item.durationSeconds)} • ${_formatDateTime(item.executedAt)}',
+                                      timeRangeLine,
                                       style: TextStyle(
                                         fontSize: 12,
                                         color: colorScheme.onSurfaceVariant,
                                       ),
                                     ),
                                     const SizedBox(height: 6),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 8,
-                                        vertical: 3,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: fullyLocked
-                                            ? Colors.tealAccent.shade700
-                                                .withValues(alpha: 0.16)
-                                            : Colors.amber.shade800
-                                                .withValues(alpha: 0.18),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Text(
-                                        fullyLocked
-                                            ? 'Terkunci & Teredam'
-                                            : 'Hanya Teredam (Tanpa Izin Kunci)',
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w600,
-                                          color: fullyLocked
-                                              ? Colors.tealAccent.shade400
-                                              : Colors.amber.shade300,
-                                        ),
-                                      ),
+                                    Wrap(
+                                      spacing: 6,
+                                      runSpacing: 4,
+                                      children: <Widget>[
+                                        if (hasSleepDuration)
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 8,
+                                              vertical: 3,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: Colors.tealAccent.shade700
+                                                  .withValues(alpha: 0.16),
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
+                                            ),
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: <Widget>[
+                                                Icon(
+                                                  Icons.bedtime_rounded,
+                                                  size: 12,
+                                                  color: Colors
+                                                      .tealAccent.shade400,
+                                                ),
+                                                const SizedBox(width: 4),
+                                                Text(
+                                                  'Tidur ${_formatFullDuration(sleepSec)}',
+                                                  style: TextStyle(
+                                                    fontSize: 11,
+                                                    fontWeight: FontWeight.w600,
+                                                    color: Colors
+                                                        .tealAccent.shade400,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        if (item.durationSeconds > 0 ||
+                                            !hasSleepDuration)
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 8,
+                                              vertical: 3,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: colorScheme
+                                                  .surfaceContainerHighest
+                                                  .withValues(alpha: 0.6),
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
+                                            ),
+                                            child: Text(
+                                              'Timer ${_formatCompactDuration(item.durationSeconds)}',
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.w500,
+                                                color: colorScheme
+                                                    .onSurfaceVariant,
+                                              ),
+                                            ),
+                                          ),
+                                      ],
                                     ),
                                   ],
                                 ),

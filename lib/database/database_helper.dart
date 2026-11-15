@@ -11,8 +11,8 @@ class DatabaseHelper {
 
   factory DatabaseHelper() => instance;
 
-  static const String _databaseName = 'sleep_timer_utility.db';
-  static const int _databaseVersion = 1;
+  static const String _databaseName = 'eepy_time.db';
+  static const int _databaseVersion = 2;
 
   static const String tablePresets = 'presets';
   static const String tableHistory = 'history';
@@ -36,7 +36,34 @@ class DatabaseHelper {
       path,
       version: _databaseVersion,
       onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
     );
+  }
+
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      final List<Map<String, Object?>> cols =
+          await db.rawQuery('PRAGMA table_info($tableHistory)');
+      final Set<String> existingCols = cols
+          .map((Map<String, Object?> row) => (row['name'] as String?) ?? '')
+          .toSet();
+
+      if (!existingCols.contains('session_key')) {
+        await db.execute(
+          'ALTER TABLE $tableHistory ADD COLUMN session_key TEXT',
+        );
+      }
+      if (!existingCols.contains('woke_up_at')) {
+        await db.execute(
+          'ALTER TABLE $tableHistory ADD COLUMN woke_up_at TEXT',
+        );
+      }
+      if (!existingCols.contains('sleep_duration_seconds')) {
+        await db.execute(
+          'ALTER TABLE $tableHistory ADD COLUMN sleep_duration_seconds INTEGER',
+        );
+      }
+    }
   }
 
   Future<void> _onCreate(Database db, int version) async {
@@ -52,9 +79,12 @@ class DatabaseHelper {
     await db.execute('''
       CREATE TABLE $tableHistory (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_key TEXT,
         preset_label TEXT NOT NULL,
         duration_seconds INTEGER NOT NULL,
         executed_at TEXT NOT NULL,
+        woke_up_at TEXT,
+        sleep_duration_seconds INTEGER,
         is_screen_locked INTEGER NOT NULL DEFAULT 1,
         is_audio_muted INTEGER NOT NULL DEFAULT 1
       )
@@ -109,6 +139,16 @@ class DatabaseHelper {
       <String, dynamic>{'key': 'haptic_feedback', 'value': 'true'},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+    batch.insert(
+      tableSettings,
+      <String, dynamic>{'key': 'toast_notifications', 'value': 'true'},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    batch.insert(
+      tableSettings,
+      <String, dynamic>{'key': 'onboarding_completed', 'value': 'false'},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
 
     await batch.commit(noResult: true);
   }
@@ -159,6 +199,25 @@ class DatabaseHelper {
 
   Future<int> insertHistory(HistoryModel history) async {
     final Database db = await database;
+    if (history.sessionKey != null && history.sessionKey!.isNotEmpty) {
+      final List<Map<String, Object?>> existing = await db.query(
+        tableHistory,
+        columns: <String>['id'],
+        where: 'session_key = ?',
+        whereArgs: <Object>[history.sessionKey!],
+        limit: 1,
+      );
+      if (existing.isNotEmpty) {
+        final int existingId = (existing.first['id'] as num).toInt();
+        await db.update(
+          tableHistory,
+          history.copyWith(id: existingId).toMap(),
+          where: 'id = ?',
+          whereArgs: <Object>[existingId],
+        );
+        return existingId;
+      }
+    }
     return db.insert(
       tableHistory,
       history.toMap(),
@@ -171,45 +230,48 @@ class DatabaseHelper {
     return db.delete(tableHistory);
   }
 
-  /// Menghitung ringkasan kebiasaan menggunakan query agregasi SQLite:
+  /// Menghitung ringkasan kebiasaan tidur berdasarkan waktu aktual antara
+  /// layar terkunci (timer habis) hingga layar dibuka kembali:
   /// - Total Sesi (`totalSessions`)
-  /// - Total Sesi Terkunci Penuh (`successfulSessions`)
-  /// - Total Waktu Penggunaan dalam detik (`totalDurationSeconds`)
-  /// - Rata-rata Durasi dalam detik (`averageDurationSeconds`)
+  /// - Total Waktu Tidur dalam detik (`totalSleepSeconds`)
+  /// - Rata-rata Durasi Tidur dalam detik (`averageSleepSeconds`)
   Future<Map<String, int>> getHabitSummary() async {
     final Database db = await database;
     final List<Map<String, Object?>> result = await db.rawQuery('''
       SELECT 
         COUNT(*) AS total_sessions,
-        COALESCE(SUM(CASE WHEN is_screen_locked = 1 THEN 1 ELSE 0 END), 0) AS successful_sessions,
-        COALESCE(SUM(duration_seconds), 0) AS total_duration_seconds,
-        COALESCE(AVG(duration_seconds), 0) AS average_duration_seconds
+        COALESCE(SUM(COALESCE(sleep_duration_seconds, 0)), 0) AS total_sleep_seconds,
+        COALESCE(
+          AVG(
+            CASE 
+              WHEN sleep_duration_seconds IS NOT NULL AND sleep_duration_seconds > 0 
+              THEN sleep_duration_seconds 
+            END
+          ),
+          0
+        ) AS average_sleep_seconds
       FROM $tableHistory
     ''');
 
     if (result.isEmpty) {
       return const <String, int>{
         'totalSessions': 0,
-        'successfulSessions': 0,
-        'totalDurationSeconds': 0,
-        'averageDurationSeconds': 0,
+        'totalSleepSeconds': 0,
+        'averageSleepSeconds': 0,
       };
     }
 
     final Map<String, Object?> row = result.first;
     final int totalSessions = (row['total_sessions'] as num?)?.toInt() ?? 0;
-    final int successfulSessions =
-        (row['successful_sessions'] as num?)?.toInt() ?? 0;
-    final int totalDurationSeconds =
-        (row['total_duration_seconds'] as num?)?.toInt() ?? 0;
-    final int averageDurationSeconds =
-        (row['average_duration_seconds'] as num?)?.round() ?? 0;
+    final int totalSleepSeconds =
+        (row['total_sleep_seconds'] as num?)?.toInt() ?? 0;
+    final int averageSleepSeconds =
+        (row['average_sleep_seconds'] as num?)?.round() ?? 0;
 
     return <String, int>{
       'totalSessions': totalSessions,
-      'successfulSessions': successfulSessions,
-      'totalDurationSeconds': totalDurationSeconds,
-      'averageDurationSeconds': averageDurationSeconds,
+      'totalSleepSeconds': totalSleepSeconds,
+      'averageSleepSeconds': averageSleepSeconds,
     };
   }
 
