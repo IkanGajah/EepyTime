@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -19,6 +21,7 @@ class TimerTabView extends StatefulWidget {
 class _TimerTabViewState extends State<TimerTabView>
     with WidgetsBindingObserver {
   TimerController get _controller => widget.controller;
+  bool _isDraggingWheel = false;
 
   @override
   void initState() {
@@ -243,6 +246,9 @@ class _TimerTabViewState extends State<TimerTabView>
             : colorScheme.outlineVariant.withValues(alpha: 0.4);
 
         return SingleChildScrollView(
+          physics: _isDraggingWheel
+              ? const NeverScrollableScrollPhysics()
+              : null,
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -469,56 +475,29 @@ class _TimerTabViewState extends State<TimerTabView>
           ),
           const SizedBox(height: 20),
 
-          // Lingkaran Progres & Angka Hitung Mundur Proporsional (Tabular Figures)
-          SizedBox(
-            width: 230,
-            height: 230,
-            child: Stack(
-              alignment: Alignment.center,
-              children: <Widget>[
-                SizedBox(
-                  width: 220,
-                  height: 220,
-                  child: CircularProgressIndicator(
-                    value: _controller.progress,
-                    strokeWidth: 10,
-                    strokeCap: StrokeCap.round,
-                    backgroundColor:
-                        colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                    color: isRunning
-                        ? colorScheme.primary
-                        : (isPaused ? Colors.orangeAccent : colorScheme.secondary),
-                  ),
-                ),
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    Text(
-                      _controller.formattedRemainingTime,
-                      style: TextStyle(
-                        fontSize: 40,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 1.5,
-                        color: colorScheme.onSurface,
-                        fontFeatures: const <FontFeature>[
-                          FontFeature.tabularFigures(),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'Total: ${_formatReadableDuration(_controller.initialSeconds)}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
+          // Roda Interaktif Putar Durasi (1 Putaran Penuh = 60 Menit, Multi-Putaran)
+          _InteractiveTimerWheel(
+            remainingSeconds: _controller.remainingSeconds,
+            initialSeconds: _controller.initialSeconds,
+            progress: _controller.progress,
+            formattedTime: _controller.formattedRemainingTime,
+            totalLabel:
+                'Total: ${_formatReadableDuration(_controller.initialSeconds)}',
+            isRunning: isRunning,
+            isPaused: isPaused,
+            colorScheme: colorScheme,
+            onDurationChanged: (int newSeconds) {
+              _controller.setDurationFromWheel(newSeconds);
+            },
+            onDragStateChanged: (bool dragging) {
+              if (_isDraggingWheel != dragging) {
+                setState(() {
+                  _isDraggingWheel = dragging;
+                });
+              }
+            },
           ),
-          const SizedBox(height: 22),
+          const SizedBox(height: 20),
 
           // Tombol Kontrol Utama: Mulai/Jeda & Reset ke 0
           Row(
@@ -1100,5 +1079,447 @@ class _AddPresetDialogState extends State<_AddPresetDialog> {
         ),
       ],
     );
+  }
+}
+
+class _InteractiveTimerWheel extends StatefulWidget {
+  final int remainingSeconds;
+  final int initialSeconds;
+  final double progress;
+  final String formattedTime;
+  final String totalLabel;
+  final bool isRunning;
+  final bool isPaused;
+  final ColorScheme colorScheme;
+  final ValueChanged<int> onDurationChanged;
+  final ValueChanged<bool> onDragStateChanged;
+
+  const _InteractiveTimerWheel({
+    required this.remainingSeconds,
+    required this.initialSeconds,
+    required this.progress,
+    required this.formattedTime,
+    required this.totalLabel,
+    required this.isRunning,
+    required this.isPaused,
+    required this.colorScheme,
+    required this.onDurationChanged,
+    required this.onDragStateChanged,
+  });
+
+  @override
+  State<_InteractiveTimerWheel> createState() => _InteractiveTimerWheelState();
+}
+
+class _InteractiveTimerWheelState extends State<_InteractiveTimerWheel> {
+  static const double _wheelSize = 256.0;
+  static const double _ringRadius = 108.0;
+  static const double _minHitRadius = 68.0;
+  static const double _maxHitRadius = 132.0;
+  static const double _maxMinutes = 720.0; // Maks 12 putaran (12 Jam)
+
+  int? _activePointer;
+  double _lastAngle = 0.0;
+  double _continuousMinutes = 0.0;
+
+  bool get _isDragging => _activePointer != null;
+
+  double get _displayedSeconds => widget.isPaused
+      ? widget.remainingSeconds.toDouble()
+      : widget.initialSeconds.toDouble();
+
+  /// Sudut searah jarum jam `[0, 2π)` dengan `0` di posisi jam 12 (atas).
+  double _angleFromCenter(Offset localPosition) {
+    const Offset center = Offset(_wheelSize / 2, _wheelSize / 2);
+    final double dx = localPosition.dx - center.dx;
+    final double dy = localPosition.dy - center.dy;
+    double angle = math.atan2(dx, -dy);
+    if (angle < 0) {
+      angle += 2 * math.pi;
+    }
+    return angle;
+  }
+
+  double _shortestAngularDistance(double a, double b) {
+    double diff = (a - b).abs();
+    if (diff > math.pi) {
+      diff = (2 * math.pi) - diff;
+    }
+    return diff;
+  }
+
+  double _currentHandleAngle(double currentMinutes) {
+    if (currentMinutes <= 0) {
+      return 0.0;
+    }
+    final double rem = currentMinutes % 60.0;
+    if (rem == 0.0) {
+      return 0.0;
+    }
+    return (rem / 60.0) * 2 * math.pi;
+  }
+
+  void _handlePointerDown(PointerDownEvent event) {
+    if (widget.isRunning || _activePointer != null) {
+      return;
+    }
+
+    const Offset center = Offset(_wheelSize / 2, _wheelSize / 2);
+    final double dist = (event.localPosition - center).distance;
+    if (dist < _minHitRadius || dist > _maxHitRadius) {
+      return;
+    }
+
+    final double touchAngle = _angleFromCenter(event.localPosition);
+    final double curMinutes = _displayedSeconds / 60.0;
+    final double handleAngle = _currentHandleAngle(curMinutes);
+
+    setState(() {
+      _activePointer = event.pointer;
+      _lastAngle = touchAngle;
+    });
+    widget.onDragStateChanged(true);
+
+    // Jika pengguna menyentuh dekat kenop pegangan (~34 derajat), pegang tanpa melompat.
+    if (_shortestAngularDistance(touchAngle, handleAngle) <= 0.60) {
+      _continuousMinutes = curMinutes;
+      return;
+    }
+
+    // Jika pengguna mengetuk/menyentuh langsung titik lain di cincin roda:
+    final int currentLap =
+        curMinutes <= 0 ? 0 : ((curMinutes - 0.001) ~/ 60);
+    final double ringMinutes = (touchAngle / (2 * math.pi)) * 60.0;
+
+    // Cegah lompatan tidak sengaja dari 0m ke 58-59m jika sedikit meleset di kiri atas.
+    if (curMinutes <= 0 && touchAngle > (2 * math.pi * 335.0 / 360.0)) {
+      _continuousMinutes = 0.0;
+    } else {
+      _continuousMinutes =
+          (currentLap * 60.0 + ringMinutes).clamp(0.0, _maxMinutes);
+    }
+
+    final int snappedMinutes = _continuousMinutes.round();
+    widget.onDurationChanged(snappedMinutes * 60);
+  }
+
+  void _handlePointerMove(PointerMoveEvent event) {
+    if (event.pointer != _activePointer) {
+      return;
+    }
+    if (widget.isRunning) {
+      _endDrag();
+      return;
+    }
+
+    const Offset center = Offset(_wheelSize / 2, _wheelSize / 2);
+    if ((event.localPosition - center).distance < 16.0) {
+      return;
+    }
+
+    final double angle = _angleFromCenter(event.localPosition);
+    double delta = angle - _lastAngle;
+    if (delta > math.pi) {
+      delta -= 2 * math.pi;
+    } else if (delta < -math.pi) {
+      delta += 2 * math.pi;
+    }
+    _lastAngle = angle;
+
+    _continuousMinutes =
+        (_continuousMinutes + (delta / (2 * math.pi)) * 60.0)
+            .clamp(0.0, _maxMinutes);
+
+    final int snappedMinutes = _continuousMinutes.round();
+    widget.onDurationChanged(snappedMinutes * 60);
+  }
+
+  void _handlePointerUpOrCancel(PointerEvent event) {
+    if (event.pointer != _activePointer) {
+      return;
+    }
+    _endDrag();
+  }
+
+  void _endDrag() {
+    if (_activePointer != null) {
+      setState(() {
+        _activePointer = null;
+      });
+    }
+    widget.onDragStateChanged(false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final double dialSeconds = _displayedSeconds;
+    final int completedHourLaps =
+        dialSeconds <= 0 ? 0 : ((dialSeconds.round() - 1) ~/ 3600);
+
+    final Color activeColor = widget.isRunning
+        ? widget.colorScheme.primary
+        : (widget.isPaused
+            ? Colors.orangeAccent
+            : widget.colorScheme.primary);
+
+    return Center(
+      child: Listener(
+        behavior: HitTestBehavior.opaque,
+        onPointerDown: _handlePointerDown,
+        onPointerMove: _handlePointerMove,
+        onPointerUp: _handlePointerUpOrCancel,
+        onPointerCancel: _handlePointerUpOrCancel,
+        child: SizedBox(
+          width: _wheelSize,
+          height: _wheelSize,
+          child: Stack(
+            alignment: Alignment.center,
+            children: <Widget>[
+              CustomPaint(
+                size: const Size(_wheelSize, _wheelSize),
+                painter: _TimerWheelPainter(
+                  ringRadius: _ringRadius,
+                  dialSeconds: dialSeconds,
+                  runningProgress: widget.progress,
+                  isRunning: widget.isRunning,
+                  isDragging: _isDragging,
+                  activeColor: activeColor,
+                  secondaryLapColor: widget.colorScheme.tertiary,
+                  trackColor: widget.colorScheme.surfaceContainerHighest
+                      .withValues(alpha: 0.55),
+                  tickColor: widget.colorScheme.onSurfaceVariant
+                      .withValues(alpha: 0.35),
+                  knobBorderColor: widget.colorScheme.surface,
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 38),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Text(
+                      widget.formattedTime,
+                      style: TextStyle(
+                        fontSize: 34,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.2,
+                        color: widget.colorScheme.onSurface,
+                        fontFeatures: const <FontFeature>[
+                          FontFeature.tabularFigures(),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      widget.totalLabel,
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: widget.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    if (!widget.isRunning) ...<Widget>[
+                      const SizedBox(height: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: widget.colorScheme.primary
+                              .withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          completedHourLaps > 0
+                              ? 'Putaran ${completedHourLaps + 1} • 60m/putaran'
+                              : 'Geser roda • 60m/putaran',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            color: widget.colorScheme.primary,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TimerWheelPainter extends CustomPainter {
+  final double ringRadius;
+  final double dialSeconds;
+  final double runningProgress;
+  final bool isRunning;
+  final bool isDragging;
+  final Color activeColor;
+  final Color secondaryLapColor;
+  final Color trackColor;
+  final Color tickColor;
+  final Color knobBorderColor;
+
+  const _TimerWheelPainter({
+    required this.ringRadius,
+    required this.dialSeconds,
+    required this.runningProgress,
+    required this.isRunning,
+    required this.isDragging,
+    required this.activeColor,
+    required this.secondaryLapColor,
+    required this.trackColor,
+    required this.tickColor,
+    required this.knobBorderColor,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Offset center = Offset(size.width / 2, size.height / 2);
+    const double strokeWidth = 14.0;
+    const double startTopAngle = -math.pi / 2;
+
+    // 1. Tanda garis menit halus di sisi dalam roda (60 titik, tebal tiap 15m)
+    final Paint minorTickPaint = Paint()
+      ..color = tickColor.withValues(alpha: 0.22)
+      ..strokeWidth = 1.2
+      ..strokeCap = StrokeCap.round;
+    final Paint majorTickPaint = Paint()
+      ..color = tickColor.withValues(alpha: 0.55)
+      ..strokeWidth = 2.2
+      ..strokeCap = StrokeCap.round;
+
+    for (int i = 0; i < 60; i++) {
+      final bool isMajor = i % 15 == 0;
+      final double a = startTopAngle + (i / 60.0) * 2 * math.pi;
+      final double outerR = ringRadius - 13.0;
+      final double innerR = isMajor ? (outerR - 7.0) : (outerR - 3.5);
+      final Offset p1 = Offset(
+        center.dx + innerR * math.cos(a),
+        center.dy + innerR * math.sin(a),
+      );
+      final Offset p2 = Offset(
+        center.dx + outerR * math.cos(a),
+        center.dy + outerR * math.sin(a),
+      );
+      canvas.drawLine(p1, p2, isMajor ? majorTickPaint : minorTickPaint);
+    }
+
+    // 2. Lingkaran jalur dasar (Track)
+    final Paint trackPaint = Paint()
+      ..color = trackColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth;
+    canvas.drawCircle(center, ringRadius, trackPaint);
+
+    final Rect arcRect = Rect.fromCircle(center: center, radius: ringRadius);
+
+    // 3. Mode sedang berjalan: tampilkan busur progres hitung mundur murni
+    if (isRunning) {
+      final double clampedProgress = runningProgress.clamp(0.0, 1.0);
+      if (clampedProgress > 0) {
+        final Paint progressPaint = Paint()
+          ..color = activeColor
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = strokeWidth
+          ..strokeCap = StrokeCap.round;
+        canvas.drawArc(
+          arcRect,
+          startTopAngle,
+          clampedProgress * 2 * math.pi,
+          false,
+          progressPaint,
+        );
+      }
+      return;
+    }
+
+    // 4. Mode interaktif (Idle / Paused): 1 putaran = 60 menit (3600 detik), multi-putaran
+    final double totalMinutes = (dialSeconds / 60.0).clamp(0.0, 720.0);
+    double knobAngle = startTopAngle;
+
+    if (totalMinutes > 0) {
+      final bool isMultiLap = totalMinutes > 60.0;
+      final double remMinutes = totalMinutes % 60.0;
+      final double currentLapFraction =
+          remMinutes == 0.0 ? 1.0 : (remMinutes / 60.0);
+
+      if (isMultiLap) {
+        // Gambar lingkaran penuh di bawahnya sebagai penanda sudah melewati >= 60 menit
+        final Paint baseLapPaint = Paint()
+          ..color = activeColor.withValues(alpha: 0.42)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = strokeWidth;
+        canvas.drawCircle(center, ringRadius, baseLapPaint);
+      }
+
+      final Paint activeArcPaint = Paint()
+        ..color = isMultiLap ? secondaryLapColor : activeColor
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = strokeWidth
+        ..strokeCap = StrokeCap.round;
+
+      if (currentLapFraction >= 0.999) {
+        canvas.drawCircle(center, ringRadius, activeArcPaint);
+      } else {
+        canvas.drawArc(
+          arcRect,
+          startTopAngle,
+          currentLapFraction * 2 * math.pi,
+          false,
+          activeArcPaint,
+        );
+      }
+
+      knobAngle = startTopAngle + (currentLapFraction % 1.0) * 2 * math.pi;
+    }
+
+    // 5. Kenop pegangan geser (Thumb Handle) di atas cincin
+    final Offset knobCenter = Offset(
+      center.dx + ringRadius * math.cos(knobAngle),
+      center.dy + ringRadius * math.sin(knobAngle),
+    );
+    final Color knobColor =
+        totalMinutes > 60.0 ? secondaryLapColor : activeColor;
+    final double knobRadius = isDragging ? 13.5 : 11.0;
+
+    // Efek pendaran halus saat digeser
+    final Paint haloPaint = Paint()
+      ..color = knobColor.withValues(alpha: isDragging ? 0.32 : 0.18)
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(knobCenter, knobRadius + (isDragging ? 7.0 : 4.0), haloPaint);
+
+    final Paint knobBorderPaint = Paint()
+      ..color = knobBorderColor
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(knobCenter, knobRadius + 2.2, knobBorderPaint);
+
+    final Paint knobFillPaint = Paint()
+      ..color = knobColor
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(knobCenter, knobRadius, knobFillPaint);
+
+    final Paint innerDotPaint = Paint()
+      ..color = knobBorderColor
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(knobCenter, 3.5, innerDotPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _TimerWheelPainter oldDelegate) {
+    return oldDelegate.dialSeconds != dialSeconds ||
+        oldDelegate.runningProgress != runningProgress ||
+        oldDelegate.isRunning != isRunning ||
+        oldDelegate.isDragging != isDragging ||
+        oldDelegate.activeColor != activeColor ||
+        oldDelegate.secondaryLapColor != secondaryLapColor ||
+        oldDelegate.trackColor != trackColor;
   }
 }

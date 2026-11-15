@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:eepy_time/controllers/timer_controller.dart';
 import 'package:eepy_time/main.dart';
 import 'package:flutter/material.dart';
@@ -84,5 +86,47 @@ void main() {
     expect(controller.initialSeconds, 0);
     expect(controller.remainingSeconds, 0);
     expect(controller.formattedRemainingTime, '00:00:00');
+  });
+
+  testWidgets(
+      'Interactive circular wheel sets minutes (60m per full rotation) and supports multiple rotations',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(const EepyTimeApp());
+    await tester.pump();
+
+    final Finder wheelHint = find.text('Geser roda • 60m/putaran');
+    expect(wheelHint, findsOneWidget);
+
+    final Finder customPaintFinder = find.ancestor(
+      of: wheelHint,
+      matching: find.byWidgetPredicate(
+        (Widget w) => w is SizedBox && w.width == 256.0 && w.height == 256.0,
+      ),
+    );
+    await tester.ensureVisible(customPaintFinder);
+    final Offset center = tester.getCenter(customPaintFinder);
+    const double ringRadius = 108.0;
+
+    // Touch at 3 o'clock (15 minutes) and rotate clockwise 1 full turn (+60m -> 1h 15m)
+    final Offset threeOClock = Offset(center.dx + ringRadius, center.dy);
+    final TestGesture gesture = await tester.startGesture(threeOClock);
+    await tester.pump();
+    expect(find.text('00:15:00'), findsOneWidget);
+
+    const int steps = 36;
+    for (int i = 1; i <= steps; i++) {
+      final double angle = (i / steps) * 2 * math.pi; // clockwise from 3 o'clock
+      final Offset nextPos = Offset(
+        center.dx + ringRadius * math.cos(angle),
+        center.dy + ringRadius * math.sin(angle),
+      );
+      await gesture.moveTo(nextPos);
+      await tester.pump();
+    }
+    await gesture.up();
+    await tester.pump();
+
+    expect(find.text('01:15:00'), findsOneWidget);
+    expect(find.text('Putaran 2 • 60m/putaran'), findsOneWidget);
   });
 }

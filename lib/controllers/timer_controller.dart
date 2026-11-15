@@ -362,6 +362,50 @@ class TimerController extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
+  /// Mengatur durasi secara langsung saat pengguna memutar roda melingkar (wheel).
+  /// Mendukung pengembalian ke `0` detik tanpa membanjiri MethodChannel.
+  void setDurationFromWheel(int seconds, {String? label}) {
+    final int clamped = seconds.clamp(0, 12 * 3600);
+    if (_timerStatus == TimerStatus.idle &&
+        _initialSeconds == clamped &&
+        _remainingSeconds == clamped) {
+      return;
+    }
+
+    if (_isHapticEnabled) {
+      HapticFeedback.selectionClick();
+    }
+
+    final bool wasActive = _timerStatus != TimerStatus.idle;
+    _countdownTimer?.cancel();
+    _deadline = null;
+    _initialSeconds = clamped;
+    _remainingSeconds = clamped;
+    _timerStatus = TimerStatus.idle;
+
+    if (clamped <= 0) {
+      _activePresetLabel = defaultIdleLabel;
+    } else if (label != null && label.trim().isNotEmpty) {
+      _activePresetLabel = label.trim();
+    } else {
+      final int hours = clamped ~/ 3600;
+      final int minutes = (clamped % 3600) ~/ 60;
+      final List<String> parts = <String>[];
+      if (hours > 0) {
+        parts.add('$hours Jam');
+      }
+      if (minutes > 0) {
+        parts.add('$minutes Menit');
+      }
+      _activePresetLabel = 'Manual (${parts.join(' ')})';
+    }
+
+    if (wasActive) {
+      _nativeControlService.stopNativeTimer();
+    }
+    notifyListeners();
+  }
+
   /// Memulai atau menjeda hitung mundur berbasis waktu selesai (`_deadline`).
   /// Mengembalikan `false` jika belum ada durasi (> 0 detik) yang dipilih.
   bool startOrPauseTimer() {
