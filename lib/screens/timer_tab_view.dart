@@ -257,17 +257,9 @@ class _TimerTabViewState extends State<TimerTabView>
                 cardBgColor: cardBgColor,
                 cardBorderColor: cardBorderColor,
               ),
-              const SizedBox(height: 16),
-
-              // 3. PANEL KONTROL CEPAT (REDAM, PULIHKAN, KUNCI SEKALI KETUK)
-              _buildQuickActionsCard(
-                colorScheme: colorScheme,
-                cardBgColor: cardBgColor,
-                cardBorderColor: cardBorderColor,
-              ),
               const SizedBox(height: 20),
 
-              // 4. MANAJEMEN PRESET DURASI (SQLITE)
+              // 3. MANAJEMEN PRESET DURASI (SQLITE)
               _buildPresetsSection(
                 colorScheme: colorScheme,
                 cardBgColor: cardBgColor,
@@ -605,103 +597,6 @@ class _TimerTabViewState extends State<TimerTabView>
     );
   }
 
-  Widget _buildQuickActionsCard({
-    required ColorScheme colorScheme,
-    required Color cardBgColor,
-    required Color cardBorderColor,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: cardBgColor,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: cardBorderColor),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Row(
-            children: <Widget>[
-              Icon(
-                Icons.flash_on_rounded,
-                size: 18,
-                color: colorScheme.primary,
-              ),
-              const SizedBox(width: 8),
-              const Expanded(
-                child: Text(
-                  'Kontrol Cepat (Eksekusi Sekali Ketuk)',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: _QuickActionButton(
-                  icon: Icons.volume_off_rounded,
-                  label: 'Redam\nSekali Ketuk',
-                  color: Colors.redAccent.shade200,
-                  onTap: () async {
-                    final int prevVolume = await _controller.oneTapMute();
-                    _showSnackBar(
-                      'Suara media diredam ke 0 (Volume sebelumnya: $prevVolume).',
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _QuickActionButton(
-                  icon: Icons.settings_backup_restore_rounded,
-                  label: 'Pulihkan\nSuara',
-                  color: Colors.tealAccent.shade400,
-                  onTap: () async {
-                    final int restoredVolume = await _controller.restoreAudio();
-                    _showSnackBar(
-                      'Suara media dipulihkan ke level $restoredVolume.',
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _QuickActionButton(
-                  icon: Icons.screen_lock_portrait_rounded,
-                  label: 'Kunci\nSekali Ketuk',
-                  color: Colors.amberAccent.shade200,
-                  onTap: () async {
-                    final bool locked = await _controller.oneTapLock();
-                    if (!locked) {
-                      _showSnackBar(
-                        'Gagal mengunci layar: Izin Device Admin belum aktif!',
-                        isWarning: true,
-                        action: SnackBarAction(
-                          label: 'Beri Izin',
-                          textColor: Colors.amber.shade200,
-                          onPressed: () {
-                            _controller.requestAdminPermission();
-                          },
-                        ),
-                      );
-                    } else {
-                      _showSnackBar('Layar perangkat berhasil dikunci.');
-                    }
-                  },
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildPresetsSection({
     required ColorScheme colorScheme,
     required Color cardBgColor,
@@ -903,55 +798,6 @@ class _StatusChip extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _QuickActionButton extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final Color color;
-  final VoidCallback onTap;
-
-  const _QuickActionButton({
-    required this.icon,
-    required this.label,
-    required this.color,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: color.withValues(alpha: 0.1),
-      borderRadius: BorderRadius.circular(14),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(14),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: color.withValues(alpha: 0.35)),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Icon(icon, color: color, size: 24),
-              const SizedBox(height: 6),
-              Text(
-                label,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
-                  height: 1.2,
-                ),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }
